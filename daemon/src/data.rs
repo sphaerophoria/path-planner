@@ -53,17 +53,15 @@ impl Data {
                     let mut tags = Vec::new();
                     let mut node_ids = Vec::new();
                     for (key, value) in way.tags() {
-                        if key == "highway" {
-                            if node_ids.is_empty() {
-                                for id in way.refs() {
-                                    node_ids.push(id);
-                                }
-
-                                relevant_nodes.extend(node_ids.clone());
+                        if node_ids.is_empty() {
+                            for id in way.refs() {
+                                node_ids.push(id);
                             }
 
-                            tags.push(value.to_string());
+                            relevant_nodes.extend(node_ids.clone());
                         }
+
+                        tags.push(format!("{}/{}", key, value));
                     }
                     ways.push((node_ids, tags));
                 }
