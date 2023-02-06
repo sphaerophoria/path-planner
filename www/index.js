@@ -7,7 +7,7 @@ const VERTEX_SHADER_SOURCE =
 
      void main(void) { \
          float lat_rad = long_lat.y * 3.1415962 / 180.0; \
-         vec2 pos = (long_lat - center) * scale * 2.0; \
+         vec2 pos = (long_lat - center) * scale; \
          pos.x = pos.x * cos(lat_rad) / aspect_ratio; \
          gl_Position = vec4(pos, 0.1, 1.0); \
      }`
@@ -81,8 +81,12 @@ class Renderer {
         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null)
 
-        this.canvas.onmousemove = this.onMouseMove.bind(this)
-        this.canvas.addEventListener('wheel', this.onScroll.bind(this))
+        let canvasHolder = document.getElementById('canvas-holder')
+        canvasHolder.onmousemove = this.onMouseMove.bind(this)
+        canvasHolder.addEventListener('wheel', this.onScroll.bind(this))
+
+        canvasHolder.onmouseenter = this._onMouseEnter.bind(this)
+        canvasHolder.onmouseleave = this._onMouseLeave.bind(this)
     }
 
     render_map(timestamp) {
@@ -135,35 +139,57 @@ class Renderer {
     }
 
     onMouseMove(e) {
+        this._update_overlay(e)
         if (e.buttons == 0) {
             return
         }
 
-        let [x_movement_long, y_movement_lat] = this._pixelToLongLat(e.movementX, e.movementY)
-        this.center[0] -= x_movement_long
+        let [start_long, start_lat] = this._pixelToLongLat(
+            e.pageX + e.movementX,
+            e.pageY + e.movementY)
+
+        let [end_long, end_lat] = this._pixelToLongLat(e.pageX, e.pageY)
+        let x_movement_long = end_long - start_long
+        let y_movement_lat = end_lat - start_lat
+        this.center[0] += x_movement_long
         this.center[1] += y_movement_lat
         window.requestAnimationFrame(this.render_map.bind(this))
     }
 
+
+    _update_overlay(e) {
+        let [x, y] = this._pixelToLongLat(e.pageX, e.pageY)
+        let elem = document.getElementById("pointer-lat-long")
+        elem.textContent = "Lat: " + y + ", Long: " + x
+    }
+
     _pixelToLongLat(x, y) {
-        // NOTE: division of x by height looks wrong, but our map is
-        // scaled relative to the height of the screen independently of the
-        // width
-        let x_rel = x / this.canvas.height
-        let y_rel = y / this.canvas.height
+        let x_rel = ((x / this.canvas.width) * 2.0 - 1.0) * this.canvas.width / this.canvas.height
+        let y_rel = ((1.0 - y / this.canvas.height) * 2.0 - 1.0)
 
         // We also scale our image with our latitude so that our map has 1
         // degree x ~= 1 degree y in distance. We can be pretty approximate
         // here.
-        let x_long = (
+        let x_long_rel = (
             x_rel / this.scale / Math.cos(this.center[1] * 3.14159 / 180.0)
         )
 
-        let y_lat = y_rel / this.scale
+        let y_lat_rel = y_rel / this.scale
 
-        return [x_long, y_lat]
+        return [x_long_rel + this.center[0], y_lat_rel + this.center[1]]
     }
 
+    _onMouseLeave(e) {
+        console.log("leave")
+        let elem = document.getElementById("overlay")
+        elem.style.display = "none"
+    }
+
+    _onMouseEnter(e) {
+        let elem = document.getElementById("overlay")
+        elem.style.display = "block"
+        this._update_overlay(e)
+    }
 }
 
 async function init() {
