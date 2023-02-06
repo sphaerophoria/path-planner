@@ -4,8 +4,11 @@ const VERTEX_SHADER_SOURCE =
      precision highp float;
      in vec2 long_lat; \
      in float way_id; \
+     in vec3 v_color; \
+
      out float f_way_id; \
      out float f_selected_way; \
+     out vec3 f_color; \
      uniform float scale; \
      uniform vec2 center; \
      uniform float aspect_ratio; \ 
@@ -18,6 +21,7 @@ const VERTEX_SHADER_SOURCE =
          gl_Position = vec4(pos, 0.1, 1.0); \
          f_way_id = way_id; \
          f_selected_way = selected_way; \
+         f_color = v_color; \
      }`
 
 const FRAGMENT_SHADER_SOURCE =
@@ -25,12 +29,13 @@ const FRAGMENT_SHADER_SOURCE =
      precision highp float; \
      in float f_way_id; \
      in float f_selected_way; \
+     in vec3 f_color; \
      out vec4 fragColor; \
      void main(void) { \
        if (abs(f_way_id - f_selected_way) < 0.1) {
            fragColor = vec4(1.0, 0.0, 0.0, 1.0); \
        } else { \
-           fragColor = vec4(1.0, 1.0, 1.0, 1.0); \
+           fragColor = vec4(f_color, 1.0); \
        } \
      }`
 
@@ -52,6 +57,27 @@ const WAY_FINDER_FRAG_SOURCE =
        ); \
      }`
 
+function _way_to_color(way) {
+    for (tag of way.tags) {
+        if (tag.startsWith("cycleway")) {
+            let value = tag.substring(tag.indexOf('/') + 1)
+
+            if (value == "no") {
+                continue
+            }
+
+            return [0.0, 1.0, 0.0]
+        } else if (
+                tag == "highway/cycleway" ||
+                tag == "bicycle/designated" ||
+                tag == "bicycle/yes") {
+            return [0.0, 1.0, 0.0]
+        }
+    }
+
+    return [1.0, 1.0, 1.0]
+}
+
 function _constructMapBuffers(data) {
     // vertex buffer has a unique vertex for shared node ids in a way. This
     // allows us to attach info about a way to the render. E.g. color for
@@ -65,7 +91,7 @@ function _constructMapBuffers(data) {
     for (let i = 0; i < data.ways.length; i++) {
         index_size += data.ways[i].nodes.length
         index_size += 1
-        vertex_size += data.ways[i].nodes.length * 3
+        vertex_size += data.ways[i].nodes.length * 6
     }
 
     let indices = new Uint32Array(index_size)
@@ -76,14 +102,19 @@ function _constructMapBuffers(data) {
     for (let i = 0; i < data.ways.length; i++) {
         let way = data.ways[i]
 
+        let color = _way_to_color(way)
         for (let j = 0; j < way.nodes.length; j++) {
             let node_id = way.nodes[j]
             // Data is in decimicro degrees, but we just convert to lower
             // precision floats because it's easier  to think about, has good
             // interop with webgl, and doesn't matter
-            vertices[vertex_it * 3] = data.nodes[node_id].long / 10000000.0
-            vertices[vertex_it * 3 + 1] = data.nodes[node_id].lat / 10000000.0
-            vertices[vertex_it * 3 + 2] = i
+            vertices[vertex_it * 6] = data.nodes[node_id].long / 10000000.0
+            vertices[vertex_it * 6 + 1] = data.nodes[node_id].lat / 10000000.0
+            vertices[vertex_it * 6 + 2] = i
+            // Color
+            vertices[vertex_it * 6 + 3] = color[0]
+            vertices[vertex_it * 6 + 4] = color[1]
+            vertices[vertex_it * 6 + 5] = color[2]
             indices[index_it] = vertex_it
             vertex_it += 1
             index_it += 1
@@ -172,6 +203,8 @@ class Renderer {
         gl.useProgram(this.shaderProgram);
 
         let long_lat_loc = gl.getAttribLocation(this.shaderProgram, "long_lat");
+        let way_id_loc = gl.getAttribLocation(this.shaderProgram, "way_id");
+        let color_loc = gl.getAttribLocation(this.shaderProgram, "v_color");
 
         let scale_loc = gl.getUniformLocation(this.shaderProgram, "scale");
         gl.uniform1f(scale_loc, this.scale)
@@ -192,8 +225,15 @@ class Renderer {
         gl.bindBuffer(gl.ARRAY_BUFFER, this.vertex_buffer);
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.index_buffer);
 
-        gl.vertexAttribPointer(long_lat_loc, 2, gl.FLOAT, false, 12, 0);
+        let num_elements = 6
+        gl.vertexAttribPointer(long_lat_loc, 2, gl.FLOAT, false, 4 * num_elements, 0);
         gl.enableVertexAttribArray(long_lat_loc);
+
+        gl.vertexAttribPointer(way_id_loc, 1, gl.FLOAT, false, 4 * num_elements, 8);
+        gl.enableVertexAttribArray(way_id_loc);
+
+        gl.vertexAttribPointer(color_loc, 3, gl.FLOAT, false, 4 * num_elements, 12);
+        gl.enableVertexAttribArray(color_loc);
 
         gl.drawElements(gl.LINE_STRIP, this.index_buffer_length, gl.UNSIGNED_INT, 0);
     }
@@ -289,10 +329,11 @@ class Renderer {
         gl.bindBuffer(gl.ARRAY_BUFFER, this.vertex_buffer);
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.index_buffer);
 
-        gl.vertexAttribPointer(long_lat_loc, 2, gl.FLOAT, false, 12, 0);
+        let num_elements = 6;
+        gl.vertexAttribPointer(long_lat_loc, 2, gl.FLOAT, false, 4 * num_elements, 0);
         gl.enableVertexAttribArray(long_lat_loc);
 
-        gl.vertexAttribPointer(way_id_loc, 1, gl.FLOAT, false, 12, 8);
+        gl.vertexAttribPointer(way_id_loc, 1, gl.FLOAT, false, 4 * num_elements, 8);
         gl.enableVertexAttribArray(way_id_loc);
 
         gl.drawElements(gl.LINE_STRIP, this.index_buffer_length, gl.UNSIGNED_INT, 0);
