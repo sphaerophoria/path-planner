@@ -11,6 +11,7 @@ pub struct Node {
 
 #[derive(Serialize, Deserialize)]
 pub struct Way {
+    pub tags: Vec<String>,
     pub nodes: Vec<usize>,
 }
 
@@ -49,18 +50,22 @@ impl Data {
                     );
                 }
                 Element::Way(way) => {
-                    for (key, _) in way.tags() {
+                    let mut tags = Vec::new();
+                    let mut node_ids = Vec::new();
+                    for (key, value) in way.tags() {
                         if key == "highway" {
-                            let mut node_ids = Vec::new();
-                            for id in way.refs() {
-                                node_ids.push(id);
+                            if node_ids.is_empty() {
+                                for id in way.refs() {
+                                    node_ids.push(id);
+                                }
+
+                                relevant_nodes.extend(node_ids.clone());
                             }
 
-                            relevant_nodes.extend(node_ids.clone());
-
-                            ways.push(node_ids);
+                            tags.push(value.to_string());
                         }
                     }
+                    ways.push((node_ids, tags));
                 }
                 Element::Relation(_relation) => {}
             })
@@ -79,9 +84,10 @@ impl Data {
             .unzip();
 
         let mut new_ways = Vec::new();
-        for way in &mut ways {
+        for way in ways.into_iter() {
             new_ways.push(Way {
-                nodes: way.iter().map(|id| node_mapping[id]).collect(),
+                nodes: way.0.iter().map(|id| node_mapping[id]).collect(),
+                tags: way.1,
             });
         }
 
