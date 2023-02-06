@@ -57,25 +57,51 @@ const WAY_FINDER_FRAG_SOURCE =
        ); \
      }`
 
+function _getRGB(input) {
+    if (input.substr(0,1)=="#") {
+    var collen=(input.length-1)/3;
+    var fact=[17,1,0.062272][collen-1];
+    return [
+        Math.round(parseInt(input.substr(1,collen),16)*fact) / 255.0,
+        Math.round(parseInt(input.substr(1+collen,collen),16)*fact) / 255.0,
+        Math.round(parseInt(input.substr(1+2*collen,collen),16)*fact) / 255.0
+    ];
+    }
+    else return input.split("(")[1].split(")")[0].split(",").map(x=>+x);
+}
+
 function _way_to_color(way) {
+    const custom_regex = document.getElementById("custom-highlight-regex").value
+    let custom_color = _getRGB(document.getElementById("custom-highlight-color").value)
+
+    const re = new RegExp(custom_regex)
+    let deferred_color = null
     for (tag of way.tags) {
-        if (tag.startsWith("cycleway")) {
+        if (custom_regex.length > 3 && tag.match(re)) {
+            return custom_color
+        }
+        else if (tag.startsWith("cycleway")) {
             let value = tag.substring(tag.indexOf('/') + 1)
 
             if (value == "no") {
                 continue
             }
 
-            return [0.0, 1.0, 0.0]
+            deferred_color = [0.0, 1.0, 0.0]
         } else if (
                 tag == "highway/cycleway" ||
                 tag == "bicycle/designated" ||
                 tag == "bicycle/yes") {
-            return [0.0, 1.0, 0.0]
+            deferred_color = [0.0, 1.0, 0.0]
         }
     }
 
-    return [1.0, 1.0, 1.0]
+    if (deferred_color !== null) {
+        return deferred_color;
+    } else {
+        return [1.0, 1.0, 1.0]
+
+    }
 }
 
 function _constructMapBuffers(data) {
@@ -191,6 +217,9 @@ class Renderer {
 
         canvasHolder.onmouseenter = this._onMouseEnter.bind(this)
         canvasHolder.onmouseleave = this._onMouseLeave.bind(this)
+
+        document.getElementById('custom-highlight-regex').addEventListener('input', this._onCustomHighlightChanged.bind(this))
+        document.getElementById('custom-highlight-color').addEventListener('input', this._onCustomHighlightChanged.bind(this))
     }
 
     render_map(timestamp) {
@@ -364,7 +393,7 @@ class Renderer {
                 elem.innerHTML += "<br>"
             }
         }
-        elem.innerHTML += "Lat: " + y + ", Long: " + x
+        elem.innerHTML += "Lat: " + y + "<br>Long: " + x
         this.selected_way_id = way_id
     }
 
@@ -395,6 +424,25 @@ class Renderer {
     _onMouseEnter(e) {
         let elem = document.getElementById("overlay")
         elem.style.display = "block"
+    }
+
+    _onCustomHighlightChanged() {
+        console.log("Recoloring")
+        let [vertices, indices] = _constructMapBuffers(this.data)
+        let gl = this.gl
+
+        this.vertex_buffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.vertex_buffer);
+        gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+        gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
+        this.index_buffer = gl.createBuffer();
+        this.index_buffer_length = indices.length;
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.index_buffer);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null)
+
+        window.requestAnimationFrame(this.render_map.bind(this))
     }
 }
 

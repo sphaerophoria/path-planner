@@ -10,6 +10,7 @@ html, body {
   opacity: 70%;
   bottom: 0;
   right: 0;
+  width: 300px;
   padding: 5px;
   margin: 20px;
   /* Will be enabled by javascript on mouse enter */

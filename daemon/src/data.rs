@@ -52,6 +52,10 @@ impl Data {
                 Element::Way(way) => {
                     let mut tags = Vec::new();
                     let mut node_ids = Vec::new();
+                    let tag_keys = way.tags().map(|(k, _)| k).collect::<Vec<_>>();
+                    if !tag_keys.contains(&"highway") {
+                        return;
+                    }
                     for (key, value) in way.tags() {
                         if node_ids.is_empty() {
                             for id in way.refs() {
