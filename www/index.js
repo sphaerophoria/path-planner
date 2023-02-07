@@ -263,6 +263,8 @@ class Renderer {
     }
 
     onScroll(e) {
+        let [mouse_long, mouse_lat] = this._pixelToLongLat(e.pageX, e.pageY)
+
         // Scale needs to increase faster as we get closer, and always needs to
         // be above 0. Pick a f(s, x) where 
         // f(s, 0) = s
@@ -274,6 +276,12 @@ class Renderer {
         // fine. No mathematical reason to use this over anything else that
         // satisfies the above constraints
         this.scale *= Math.pow(1.001, -e.deltaY)
+
+        // Adjust center so that at the new scale, the pointer stays at the
+        // same latitude and longitude
+        let [new_mouse_long, new_mouse_lat] = this._pixelToLongLat(e.pageX, e.pageY)
+        this.center[0] -= new_mouse_long - mouse_long
+        this.center[1] -= new_mouse_lat - mouse_lat
         window.requestAnimationFrame(this.render_map.bind(this))
         return true
     }
