@@ -3,16 +3,16 @@ const VERTEX_SHADER_SOURCE =
     `#version 300 es
      precision highp float;
      in vec2 long_lat; \
-     in float way_id; \
+     in int way_id; \
      in vec3 v_color; \
 
-     out float f_way_id; \
-     out float f_selected_way; \
+     flat out int f_way_id; \
+     flat out int f_selected_way; \
      out vec3 f_color; \
      uniform float scale; \
      uniform vec2 center; \
      uniform float aspect_ratio; \ 
-     uniform float selected_way; \
+     uniform int selected_way; \
 
      void main(void) { \
          float lat_rad = long_lat.y * 3.1415962 / 180.0; \
@@ -27,12 +27,12 @@ const VERTEX_SHADER_SOURCE =
 const FRAGMENT_SHADER_SOURCE =
     `#version 300 es
      precision highp float; \
-     in float f_way_id; \
-     in float f_selected_way; \
+     flat in int f_way_id; \
+     flat in int f_selected_way; \
      in vec3 f_color; \
      out vec4 fragColor; \
      void main(void) { \
-       if (abs(f_way_id - f_selected_way) < 0.1) {
+       if (f_way_id == f_selected_way) {
            fragColor = vec4(1.0, 0.0, 0.0, 1.0); \
        } else { \
            fragColor = vec4(f_color, 1.0); \
@@ -42,19 +42,12 @@ const FRAGMENT_SHADER_SOURCE =
 const WAY_FINDER_FRAG_SOURCE =
     `#version 300 es
      precision highp float;
-     in float f_way_id; \
-     out vec4 fragColor; \
+     flat in int f_way_id; \
+     out int fragColor; \
      void main(void) { \
-       int full_id = int(f_way_id); \
        // This is some abuse. readPixels needs an RGBA/uint8 output, so we just
        // coerce our 32 bit int into it
-       float scale = float(0xff); \
-       fragColor = vec4( \
-           float((full_id >> 24) & 0xff) / scale,
-           float((full_id >> 16) & 0xff) / scale,
-           float((full_id >> 8) & 0xff) / scale,
-           float((full_id >> 0) & 0xff) / scale
-       ); \
+       fragColor = f_way_id; \
      }`
 
 function _getRGB(input) {
@@ -117,11 +110,13 @@ function _constructMapBuffers(data) {
     for (let i = 0; i < data.ways.length; i++) {
         index_size += data.ways[i].nodes.length
         index_size += 1
-        vertex_size += data.ways[i].nodes.length * 6
+        vertex_size += data.ways[i].nodes.length * 6 * 4
     }
 
     let indices = new Uint32Array(index_size)
-    let vertices = new Float32Array(vertex_size)
+    let vertices = new ArrayBuffer(vertex_size)
+    let float_vertices = new Float32Array(vertices)
+    let int_vertices = new Int32Array(vertices)
 
     let vertex_it = 0
     let index_it = 0
@@ -134,13 +129,13 @@ function _constructMapBuffers(data) {
             // Data is in decimicro degrees, but we just convert to lower
             // precision floats because it's easier  to think about, has good
             // interop with webgl, and doesn't matter
-            vertices[vertex_it * 6] = data.nodes[node_id].long / 10000000.0
-            vertices[vertex_it * 6 + 1] = data.nodes[node_id].lat / 10000000.0
-            vertices[vertex_it * 6 + 2] = i
+            float_vertices[vertex_it * 6] = data.nodes[node_id].long / 10000000.0
+            float_vertices[vertex_it * 6 + 1] = data.nodes[node_id].lat / 10000000.0
+            int_vertices[vertex_it * 6 + 2] = i
             // Color
-            vertices[vertex_it * 6 + 3] = color[0]
-            vertices[vertex_it * 6 + 4] = color[1]
-            vertices[vertex_it * 6 + 5] = color[2]
+            float_vertices[vertex_it * 6 + 3] = color[0]
+            float_vertices[vertex_it * 6 + 4] = color[1]
+            float_vertices[vertex_it * 6 + 5] = color[2]
             indices[index_it] = vertex_it
             vertex_it += 1
             index_it += 1
@@ -190,7 +185,7 @@ class Renderer {
 
         this.wayFinderTexture = gl.createRenderbuffer();
         gl.bindRenderbuffer(gl.RENDERBUFFER, this.wayFinderTexture)
-        gl.renderbufferStorage(gl.RENDERBUFFER, gl.RGBA8, 2, 2)
+        gl.renderbufferStorage(gl.RENDERBUFFER, gl.R32I, 2, 2)
 
         this.wayFinderBuffer = gl.createFramebuffer();
         gl.bindFramebuffer(gl.FRAMEBUFFER, this.wayFinderBuffer)
@@ -245,7 +240,7 @@ class Renderer {
         gl.uniform1f(aspect_ratio_loc, this.canvas.width / this.canvas.height)
 
         let selected_way_loc = gl.getUniformLocation(this.shaderProgram, "selected_way");
-        gl.uniform1f(selected_way_loc, this.selected_way_id)
+        gl.uniform1i(selected_way_loc, this.selected_way_id)
 
         gl.clearColor(0.5, 0.5, 0.5, 0.9);
         gl.viewport(0, 0, this.canvas.width, this.canvas.height);
@@ -258,7 +253,7 @@ class Renderer {
         gl.vertexAttribPointer(long_lat_loc, 2, gl.FLOAT, false, 4 * num_elements, 0);
         gl.enableVertexAttribArray(long_lat_loc);
 
-        gl.vertexAttribPointer(way_id_loc, 1, gl.FLOAT, false, 4 * num_elements, 8);
+        gl.vertexAttribIPointer(way_id_loc, 1, gl.INT, 4 * num_elements, 8);
         gl.enableVertexAttribArray(way_id_loc);
 
         gl.vertexAttribPointer(color_loc, 3, gl.FLOAT, false, 4 * num_elements, 12);
@@ -351,9 +346,8 @@ class Renderer {
 
         gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.wayFinderBuffer)
 
-        gl.clearColor(1.0, 1.0, 1.0, 1.0);
         gl.viewport(0, 0, 1, 1);
-        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.clearBufferiv(gl.COLOR, 0, new Uint32Array([-1, -1, -1, -1]))
 
         gl.bindBuffer(gl.ARRAY_BUFFER, this.vertex_buffer);
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.index_buffer);
@@ -362,7 +356,7 @@ class Renderer {
         gl.vertexAttribPointer(long_lat_loc, 2, gl.FLOAT, false, 4 * num_elements, 0);
         gl.enableVertexAttribArray(long_lat_loc);
 
-        gl.vertexAttribPointer(way_id_loc, 1, gl.FLOAT, false, 4 * num_elements, 8);
+        gl.vertexAttribIPointer(way_id_loc, 1, gl.INT, 4 * num_elements, 8);
         gl.enableVertexAttribArray(way_id_loc);
 
         gl.drawElements(gl.LINE_STRIP, this.index_buffer_length, gl.UNSIGNED_INT, 0);
@@ -371,12 +365,12 @@ class Renderer {
         // Set the center of the image to be where the mouse is
         // Render a 1x1 image with scale / 100
         // Check "color" of the output
-        let pixels = new Uint8Array(4)
+        let pixels = new Int32Array(4)
         gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.wayFinderBuffer)
-        gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixels)
+        gl.readPixels(0, 0, 1, 1, gl.RGBA_INTEGER, gl.INT, pixels)
         gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
 
-        let way_id = (pixels[0] << 24 | pixels[1] << 16 | pixels[2] << 8 | pixels[3])
+        let way_id = pixels[0]
         return way_id
     }
 
