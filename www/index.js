@@ -423,6 +423,8 @@ class Renderer {
 
         canvas_holder.onmouseenter = this._onMouseEnter.bind(this)
         canvas_holder.onmouseleave = this._onMouseLeave.bind(this)
+        canvas_holder.onclick = this._onLeftClick.bind(this)
+        canvas_holder.oncontextmenu = this._onRightClick.bind(this)
 
         document.getElementById('custom-highlight-regex').addEventListener('input', this._onCustomHighlightChanged.bind(this))
         document.getElementById('custom-highlight-color').addEventListener('input', this._onCustomHighlightChanged.bind(this))
@@ -641,6 +643,20 @@ class Renderer {
         gl.bindBuffer(gl.ARRAY_BUFFER, null);
 
         window.requestAnimationFrame(this.render_map.bind(this))
+    }
+
+    _onLeftClick(e) {
+        console.log("left click")
+        let context_menu = document.getElementById("context-menu")
+        context_menu.style.display = "none"
+    }
+
+    _onRightClick(e) {
+        let context_menu = document.getElementById("context-menu")
+        context_menu.style.display = "block"
+        context_menu.style.left = e.pageX  + "px"
+        context_menu.style.top = e.pageY  + "px"
+        e.preventDefault()
     }
 }
 
