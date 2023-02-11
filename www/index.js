@@ -65,7 +65,7 @@ function _getRGB(input) {
     else return input.split("(")[1].split(")")[0].split(",").map(x=>+x);
 }
 
-function _way_to_color(way) {
+function _wayToColor(way) {
     const custom_regex = document.getElementById("custom-highlight-regex").value
     let custom_color = _getRGB(document.getElementById("custom-highlight-color").value)
 
@@ -125,7 +125,7 @@ function _constructMapBuffers(data) {
     for (let i = 0; i < data.ways.length; i++) {
         let way = data.ways[i]
 
-        let color = _way_to_color(way)
+        let color = _wayToColor(way)
         for (let j = 0; j < way.nodes.length; j++) {
             let node_id = way.nodes[j]
             // Data is in decimicro degrees, but we just convert to lower
@@ -203,41 +203,41 @@ class Renderer {
         this.data = data
         this.selected_way_id = -1
 
-        let vertShader = gl.createShader(gl.VERTEX_SHADER);
-        gl.shaderSource(vertShader, VERTEX_SHADER_SOURCE);
-        gl.compileShader(vertShader);
+        let vert_shader = gl.createShader(gl.VERTEX_SHADER);
+        gl.shaderSource(vert_shader, VERTEX_SHADER_SOURCE);
+        gl.compileShader(vert_shader);
 
-        let fragShader = gl.createShader(gl.FRAGMENT_SHADER);
-        gl.shaderSource(fragShader, FRAGMENT_SHADER_SOURCE);
-        gl.compileShader(fragShader);
+        let frag_shader = gl.createShader(gl.FRAGMENT_SHADER);
+        gl.shaderSource(frag_shader, FRAGMENT_SHADER_SOURCE);
+        gl.compileShader(frag_shader);
 
-        this.shaderProgram = gl.createProgram();
-        gl.attachShader(this.shaderProgram, vertShader);
-        gl.attachShader(this.shaderProgram, fragShader);
-        gl.linkProgram(this.shaderProgram);
+        this.shader_program = gl.createProgram();
+        gl.attachShader(this.shader_program, vert_shader);
+        gl.attachShader(this.shader_program, frag_shader);
+        gl.linkProgram(this.shader_program);
 
-        let wayFinderShader = gl.createShader(gl.FRAGMENT_SHADER);
-        gl.shaderSource(wayFinderShader, WAY_FINDER_FRAG_SOURCE);
-        gl.compileShader(wayFinderShader);
+        let way_finder_shader = gl.createShader(gl.FRAGMENT_SHADER);
+        gl.shaderSource(way_finder_shader, WAY_FINDER_FRAG_SOURCE);
+        gl.compileShader(way_finder_shader);
 
-        this.wayFinderProgram = gl.createProgram()
-        gl.attachShader(this.wayFinderProgram, vertShader);
-        gl.attachShader(this.wayFinderProgram, wayFinderShader);
-        gl.linkProgram(this.wayFinderProgram);
+        this.way_finder_program = gl.createProgram()
+        gl.attachShader(this.way_finder_program, vert_shader);
+        gl.attachShader(this.way_finder_program, way_finder_shader);
+        gl.linkProgram(this.way_finder_program);
 
-        this.wayFinderTexture = gl.createRenderbuffer();
-        gl.bindRenderbuffer(gl.RENDERBUFFER, this.wayFinderTexture)
+        this.way_finder_render_buffer = gl.createRenderbuffer();
+        gl.bindRenderbuffer(gl.RENDERBUFFER, this.way_finder_render_buffer)
         gl.renderbufferStorage(gl.RENDERBUFFER, gl.R32I, WAY_FINDER_RES, WAY_FINDER_RES)
 
-        this.wayFinderBuffer = gl.createFramebuffer();
-        gl.bindFramebuffer(gl.FRAMEBUFFER, this.wayFinderBuffer)
-        gl.framebufferRenderbuffer(gl.DRAW_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, this.wayFinderTexture)
+        this.way_finder_frame_buffer = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.way_finder_frame_buffer)
+        gl.framebufferRenderbuffer(gl.DRAW_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, this.way_finder_render_buffer)
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
         let [vertices, indices] = _constructMapBuffers(data)
 
-        this.vertexArray = gl.createVertexArray()
-        gl.bindVertexArray(this.vertexArray)
+        this.vertex_array = gl.createVertexArray()
+        gl.bindVertexArray(this.vertex_array)
 
         this.vertex_buffer = gl.createBuffer();
         gl.bindBuffer(gl.ARRAY_BUFFER, this.vertex_buffer);
@@ -248,9 +248,9 @@ class Renderer {
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.index_buffer);
         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
 
-        let long_lat_loc = gl.getAttribLocation(this.shaderProgram, "long_lat");
-        let way_id_loc = gl.getAttribLocation(this.shaderProgram, "way_id");
-        let color_loc = gl.getAttribLocation(this.shaderProgram, "v_color");
+        let long_lat_loc = gl.getAttribLocation(this.shader_program, "long_lat");
+        let way_id_loc = gl.getAttribLocation(this.shader_program, "way_id");
+        let color_loc = gl.getAttribLocation(this.shader_program, "v_color");
 
         let num_elements = 6
         gl.vertexAttribPointer(long_lat_loc, 2, gl.FLOAT, false, 4 * num_elements, 0);
@@ -266,12 +266,12 @@ class Renderer {
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null)
         gl.bindBuffer(gl.ARRAY_BUFFER, null);
 
-        let canvasHolder = document.getElementById('canvas-holder')
-        canvasHolder.onmousemove = this.onMouseMove.bind(this)
-        canvasHolder.addEventListener('wheel', this.onScroll.bind(this))
+        let canvas_holder = document.getElementById('canvas-holder')
+        canvas_holder.onmousemove = this._onMouseMove.bind(this)
+        canvas_holder.addEventListener('wheel', this._onScroll.bind(this))
 
-        canvasHolder.onmouseenter = this._onMouseEnter.bind(this)
-        canvasHolder.onmouseleave = this._onMouseLeave.bind(this)
+        canvas_holder.onmouseenter = this._onMouseEnter.bind(this)
+        canvas_holder.onmouseleave = this._onMouseLeave.bind(this)
 
         document.getElementById('custom-highlight-regex').addEventListener('input', this._onCustomHighlightChanged.bind(this))
         document.getElementById('custom-highlight-color').addEventListener('input', this._onCustomHighlightChanged.bind(this))
@@ -284,29 +284,29 @@ class Renderer {
 
         let gl = this.gl;
 
-        gl.useProgram(this.shaderProgram);
+        gl.useProgram(this.shader_program);
 
-        let scale_loc = gl.getUniformLocation(this.shaderProgram, "scale");
+        let scale_loc = gl.getUniformLocation(this.shader_program, "scale");
         gl.uniform1f(scale_loc, this.scale)
 
-        let center_loc = gl.getUniformLocation(this.shaderProgram, "center");
+        let center_loc = gl.getUniformLocation(this.shader_program, "center");
         gl.uniform2f(center_loc, this.center[0], this.center[1])
 
-        let aspect_ratio_loc = gl.getUniformLocation(this.shaderProgram, "aspect_ratio");
+        let aspect_ratio_loc = gl.getUniformLocation(this.shader_program, "aspect_ratio");
         gl.uniform1f(aspect_ratio_loc, this.canvas.width / this.canvas.height)
 
-        let selected_way_loc = gl.getUniformLocation(this.shaderProgram, "selected_way");
+        let selected_way_loc = gl.getUniformLocation(this.shader_program, "selected_way");
         gl.uniform1i(selected_way_loc, this.selected_way_id)
 
         gl.clearColor(0.5, 0.5, 0.5, 0.9);
         gl.viewport(0, 0, this.canvas.width, this.canvas.height);
         gl.clear(gl.COLOR_BUFFER_BIT);
 
-        gl.bindVertexArray(this.vertexArray)
+        gl.bindVertexArray(this.vertex_array)
         gl.drawElements(gl.LINE_STRIP, this.index_buffer_length, gl.UNSIGNED_INT, 0);
     }
 
-    onScroll(e) {
+    _onScroll(e) {
         let [mouse_long, mouse_lat] = this._pixelToLongLat(e.pageX, e.pageY)
 
         // Scale needs to increase faster as we get closer, and always needs to
@@ -330,7 +330,7 @@ class Renderer {
         return true
     }
 
-    onMouseMove(e) {
+    _onMouseMove(e) {
         this._update_overlay(e)
         if (e.buttons == 0) {
             window.requestAnimationFrame(this.render_map.bind(this))
@@ -381,27 +381,27 @@ class Renderer {
         // simple javascript approach
 
         let gl = this.gl;
-        gl.useProgram(this.wayFinderProgram);
+        gl.useProgram(this.way_finder_program);
 
-        let scale_loc = gl.getUniformLocation(this.wayFinderProgram, "scale");
+        let scale_loc = gl.getUniformLocation(this.way_finder_program, "scale");
         gl.uniform1f(scale_loc, this.scale * 50)
 
-        let center_loc = gl.getUniformLocation(this.wayFinderProgram, "center");
+        let center_loc = gl.getUniformLocation(this.way_finder_program, "center");
         gl.uniform2f(center_loc, long, lat)
 
-        let aspect_ratio_loc = gl.getUniformLocation(this.wayFinderProgram, "aspect_ratio");
+        let aspect_ratio_loc = gl.getUniformLocation(this.way_finder_program, "aspect_ratio");
         gl.uniform1f(aspect_ratio_loc, this.canvas.width / this.canvas.height)
 
-        gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.wayFinderBuffer)
+        gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.way_finder_frame_buffer)
 
         gl.viewport(0, 0, WAY_FINDER_RES, WAY_FINDER_RES);
         gl.clearBufferiv(gl.COLOR, 0, new Uint32Array([-1, -1, -1, -1]))
 
-        gl.bindVertexArray(this.vertexArray)
+        gl.bindVertexArray(this.vertex_array)
         gl.drawElements(gl.LINE_STRIP, this.index_buffer_length, gl.UNSIGNED_INT, 0);
 
         let pixels = new Int32Array(4 * WAY_FINDER_RES * WAY_FINDER_RES)
-        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.wayFinderBuffer)
+        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.way_finder_frame_buffer)
         gl.readPixels(0, 0, WAY_FINDER_RES, WAY_FINDER_RES, gl.RGBA_INTEGER, gl.INT, pixels)
         gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
 
@@ -459,7 +459,7 @@ class Renderer {
         let [vertices, indices] = _constructMapBuffers(this.data)
         let gl = this.gl
 
-        gl.bindVertexArray(this.vertexArray)
+        gl.bindVertexArray(this.vertex_array)
         gl.bindBuffer(gl.ARRAY_BUFFER, this.vertex_buffer);
         gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
 
