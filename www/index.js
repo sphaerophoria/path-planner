@@ -194,17 +194,35 @@ class Renderer {
 
         let [vertices, indices] = _constructMapBuffers(data)
 
+        this.vertexArray = gl.createVertexArray()
+        gl.bindVertexArray(this.vertexArray)
+
         this.vertex_buffer = gl.createBuffer();
         gl.bindBuffer(gl.ARRAY_BUFFER, this.vertex_buffer);
         gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
-        gl.bindBuffer(gl.ARRAY_BUFFER, null);
 
         this.index_buffer = gl.createBuffer();
         this.index_buffer_length = indices.length;
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.index_buffer);
         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null)
 
+        let long_lat_loc = gl.getAttribLocation(this.shaderProgram, "long_lat");
+        let way_id_loc = gl.getAttribLocation(this.shaderProgram, "way_id");
+        let color_loc = gl.getAttribLocation(this.shaderProgram, "v_color");
+
+        let num_elements = 6
+        gl.vertexAttribPointer(long_lat_loc, 2, gl.FLOAT, false, 4 * num_elements, 0);
+        gl.enableVertexAttribArray(long_lat_loc);
+
+        gl.vertexAttribIPointer(way_id_loc, 1, gl.INT, 4 * num_elements, 8);
+        gl.enableVertexAttribArray(way_id_loc);
+
+        gl.vertexAttribPointer(color_loc, 3, gl.FLOAT, false, 4 * num_elements, 12);
+        gl.enableVertexAttribArray(color_loc);
+
+        gl.bindVertexArray(null)
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null)
+        gl.bindBuffer(gl.ARRAY_BUFFER, null);
 
         let canvasHolder = document.getElementById('canvas-holder')
         canvasHolder.onmousemove = this.onMouseMove.bind(this)
@@ -226,10 +244,6 @@ class Renderer {
 
         gl.useProgram(this.shaderProgram);
 
-        let long_lat_loc = gl.getAttribLocation(this.shaderProgram, "long_lat");
-        let way_id_loc = gl.getAttribLocation(this.shaderProgram, "way_id");
-        let color_loc = gl.getAttribLocation(this.shaderProgram, "v_color");
-
         let scale_loc = gl.getUniformLocation(this.shaderProgram, "scale");
         gl.uniform1f(scale_loc, this.scale)
 
@@ -246,19 +260,7 @@ class Renderer {
         gl.viewport(0, 0, this.canvas.width, this.canvas.height);
         gl.clear(gl.COLOR_BUFFER_BIT);
 
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.vertex_buffer);
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.index_buffer);
-
-        let num_elements = 6
-        gl.vertexAttribPointer(long_lat_loc, 2, gl.FLOAT, false, 4 * num_elements, 0);
-        gl.enableVertexAttribArray(long_lat_loc);
-
-        gl.vertexAttribIPointer(way_id_loc, 1, gl.INT, 4 * num_elements, 8);
-        gl.enableVertexAttribArray(way_id_loc);
-
-        gl.vertexAttribPointer(color_loc, 3, gl.FLOAT, false, 4 * num_elements, 12);
-        gl.enableVertexAttribArray(color_loc);
-
+        gl.bindVertexArray(this.vertexArray)
         gl.drawElements(gl.LINE_STRIP, this.index_buffer_length, gl.UNSIGNED_INT, 0);
     }
 
@@ -340,9 +342,6 @@ class Renderer {
         let gl = this.gl;
         gl.useProgram(this.wayFinderProgram);
 
-        let long_lat_loc = gl.getAttribLocation(this.wayFinderProgram, "long_lat");
-        let way_id_loc = gl.getAttribLocation(this.wayFinderProgram, "way_id");
-
         let scale_loc = gl.getUniformLocation(this.wayFinderProgram, "scale");
         gl.uniform1f(scale_loc, this.scale * 50)
 
@@ -357,16 +356,7 @@ class Renderer {
         gl.viewport(0, 0, 1, 1);
         gl.clearBufferiv(gl.COLOR, 0, new Uint32Array([-1, -1, -1, -1]))
 
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.vertex_buffer);
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.index_buffer);
-
-        let num_elements = 6;
-        gl.vertexAttribPointer(long_lat_loc, 2, gl.FLOAT, false, 4 * num_elements, 0);
-        gl.enableVertexAttribArray(long_lat_loc);
-
-        gl.vertexAttribIPointer(way_id_loc, 1, gl.INT, 4 * num_elements, 8);
-        gl.enableVertexAttribArray(way_id_loc);
-
+        gl.bindVertexArray(this.vertexArray)
         gl.drawElements(gl.LINE_STRIP, this.index_buffer_length, gl.UNSIGNED_INT, 0);
 
         // Duplicate vertices and assign a way ID
@@ -433,16 +423,16 @@ class Renderer {
         let [vertices, indices] = _constructMapBuffers(this.data)
         let gl = this.gl
 
-        this.vertex_buffer = gl.createBuffer();
+        gl.bindVertexArray(this.vertexArray)
         gl.bindBuffer(gl.ARRAY_BUFFER, this.vertex_buffer);
         gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
-        gl.bindBuffer(gl.ARRAY_BUFFER, null);
 
-        this.index_buffer = gl.createBuffer();
-        this.index_buffer_length = indices.length;
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.index_buffer);
         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+
+        gl.bindVertexArray(null)
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null)
+        gl.bindBuffer(gl.ARRAY_BUFFER, null);
 
         window.requestAnimationFrame(this.render_map.bind(this))
     }
