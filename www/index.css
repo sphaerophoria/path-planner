@@ -26,6 +26,31 @@ html, body {
   font-size: 14px;
 }
 
+.context-menu {
+  display: none;
+  position: absolute;
+}
+
+.context-menu ul {
+    background-color: black;
+    opacity: 70%;
+    padding: 0px;
+    margin: 0px;
+    min-width: 150px;
+    list-style: none;
+}
+
+.context-menu ul li {
+    padding-bottom: 7px;
+    padding-top: 7px;
+    border: 1px solid black;
+    text-decoration: none;
+}
+
+.context-menu ul li:hover {
+    background: #303030;
+}
+
 #canvas {
   position: relative;
   top: 0%;

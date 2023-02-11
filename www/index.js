@@ -14,7 +14,7 @@ const VERTEX_SHADER_SOURCE =
      out vec3 f_color; \
      uniform float scale; \
      uniform vec2 center; \
-     uniform float aspect_ratio; \ 
+     uniform float aspect_ratio; \
      uniform int selected_way; \
 
      void main(void) { \
@@ -57,6 +57,11 @@ const WAY_FINDER_FRAG_SOURCE =
      }`
 
 const WAY_FINDER_RES = 11
+
+function _contextMenuVisible() {
+    let context_menu = document.getElementById("context-menu")
+    return window.getComputedStyle(context_menu).display == "block"
+}
 
 function _getRGB(input) {
     if (input.substr(0,1)=="#") {
@@ -137,8 +142,9 @@ function _constructMapBuffers(data) {
             // Data is in decimicro degrees, but we just convert to lower
             // precision floats because it's easier  to think about, has good
             // interop with webgl, and doesn't matter
-            float_vertices[vertex_it * 6] = data.nodes[node_id].long / 10000000.0
-            float_vertices[vertex_it * 6 + 1] = data.nodes[node_id].lat / 10000000.0
+            let longlat = _nodeToLongLat(data.nodes[node_id])
+            float_vertices[vertex_it * 6] = longlat[0]
+            float_vertices[vertex_it * 6 + 1] = longlat[1]
             int_vertices[vertex_it * 6 + 2] = i
             // Color
             float_vertices[vertex_it * 6 + 3] = color[0]
@@ -157,7 +163,7 @@ function _constructMapBuffers(data) {
     return [vertices, indices]
 }
 
-function _constructWayPointBuffer(long, lat) {
+function _constructSinglePointBuffer(long, lat, color) {
     let vertices = new ArrayBuffer(24)
     let float_vertices = new Float32Array(vertices)
     let int_vertices = new Int32Array(vertices)
@@ -166,9 +172,31 @@ function _constructWayPointBuffer(long, lat) {
     float_vertices[1] = lat
     int_vertices[2] = -1
     // Color
-    float_vertices[3] = 1.0
-    float_vertices[4] = 0.0
-    float_vertices[5] = 0.0
+    float_vertices[3] = color[0]
+    float_vertices[4] = color[1]
+    float_vertices[5] = color[2]
+
+    return vertices
+}
+
+function _constructPathRenderBuffer(path) {
+    let vertices = new ArrayBuffer(24 * path.length)
+    let float_vertices = new Float32Array(vertices)
+    let int_vertices = new Int32Array(vertices)
+
+    for (let i = 0; i < path.length; i++) {
+        let long = path[i][0]
+        let lat = path[i][1]
+
+        float_vertices[6 * i] = long
+        float_vertices[6 * i + 1] = lat
+        int_vertices[6 * i + 2] = -1
+        // Color
+        float_vertices[6 * i + 3] = 0.0
+        float_vertices[6 * i + 4] = 0.0
+        float_vertices[6 * i + 5] = 1.0
+
+    }
 
     return vertices
 }
@@ -213,7 +241,7 @@ function _spiralSearchWayId(pixels) {
 }
 
 
-function _findWayLongLat(data, way_id, long, lat) {
+function _findWayPosition(data, way_id, long, lat) {
     if (way_id == -1) {
         return [null, null]
     }
@@ -226,10 +254,8 @@ function _findWayLongLat(data, way_id, long, lat) {
     // Walk the line in 10% chunks, find the shortest distance
 
     let min_dist_2 = Infinity
-    let min_dist_long = null
-    let min_dist_lat = null
-
-    // Data is in decimicro degs
+    let min_dist_node = null
+    let min_dist_factor = null
 
     let way_nodes = data.ways[way_id].nodes
     for (let way_segment_it = 0;
@@ -239,10 +265,11 @@ function _findWayLongLat(data, way_id, long, lat) {
         let n2 = data.nodes[way_nodes[way_segment_it + 1]]
 
         for (let i = 0.0; i <= 1.0; i += 0.1) {
-            let way_long = (n2.long - n1.long) * i + n1.long
-            let way_lat = (n2.lat - n1.lat) * i + n1.lat
-            way_long /= 10000000.0
-            way_lat /= 10000000.0
+            let n1_longlat = _nodeToLongLat(n1)
+            let n2_longlat = _nodeToLongLat(n2)
+
+            let way_long = (n2_longlat[0] - n1_longlat[0]) * i + n1_longlat[0]
+            let way_lat = (n2_longlat[1] - n1_longlat[1]) * i + n1_longlat[1]
 
             let long_dist = way_long - long
             let lat_dist = way_lat - lat
@@ -250,13 +277,27 @@ function _findWayLongLat(data, way_id, long, lat) {
             let dist_2 = long_dist * long_dist + lat_dist * lat_dist
             if (dist_2 < min_dist_2) {
                 min_dist_2 = dist_2
-                min_dist_long = way_long
-                min_dist_lat = way_lat
+                min_dist_node = way_segment_it
+                min_dist_factor = i
             }
         }
     }
 
-    return [min_dist_long, min_dist_lat]
+    return [min_dist_node, min_dist_factor]
+}
+
+function _wayPositionToLongLat(data, way_position) {
+    let way = data.ways[way_position[0]]
+    let n1_id = way.nodes[way_position[1]]
+    let n2_id = way.nodes[way_position[1] + 1]
+    let factor = way_position[2]
+    let n1 = data.nodes[n1_id]
+    let n2 = data.nodes[n2_id]
+
+    let long_decimicro = (n2.long - n1.long) * factor + n1.long
+    let lat_decimicro = (n2.lat - n1.lat) * factor + n1.lat
+
+    return [long_decimicro / 10000000.0, lat_decimicro / 10000000.0]
 }
 
 function _setVertexAttribPointers(gl, program) {
@@ -273,6 +314,177 @@ function _setVertexAttribPointers(gl, program) {
 
     gl.vertexAttribPointer(color_loc, 3, gl.FLOAT, false, 4 * num_elements, 12);
     gl.enableVertexAttribArray(color_loc);
+}
+
+
+function _neighbors(data, node_id) {
+    let neighbors = []
+    for (let node_to_way of data.node_to_way[node_id]) {
+        let [way_id, sub_id] = node_to_way
+        let way = data.ways[way_id]
+        if (sub_id + 1 != way.nodes.length) {
+            neighbors.push(way.nodes[sub_id + 1])
+        }
+
+        if (sub_id != 0) {
+            neighbors.push(way.nodes[sub_id - 1])
+        }
+    }
+
+    return neighbors
+}
+
+function _nodeToLongLat(node) {
+    return [node.long / 10000000.0, node.lat / 10000000.0]
+}
+
+function _distance(n1, n2) {
+    let long_dist = (n2.long - n1.long)
+    let lat_dist = (n2.lat - n1.lat)
+
+    long_dist = long_dist * Math.cos(n2.lat / 10000000.0 * 3.1415962 / 180.0)
+    long_dist /= 10000000.0
+    lat_dist /= 10000000.0
+
+    return Math.sqrt(long_dist * long_dist + lat_dist * lat_dist)
+}
+
+function _insertIntoOpenSet(open_set, f_scores, val) {
+    if (open_set.length == 0) {
+        open_set.push(val)
+    }
+
+    let last_less = 0
+    let last_greater = open_set.length
+
+    let val_score = f_scores.get(val)
+
+    while (last_greater - last_less > 1) {
+        let test_idx = Math.floor((last_less + last_greater) / 2)
+        let test_score = f_scores.get(open_set[test_idx])
+        if (test_score < val_score) {
+            last_less = test_idx
+        }
+        // Bias towards inserting at front
+        if (test_score >= val_score) {
+            last_greater = test_idx
+        }
+    }
+
+
+    open_set.splice(last_less, 0, val)
+}
+
+function _minItem(open_set, f_score) {
+    let min_item = null
+    for (let item of open_set) {
+        if (min_item === null) {
+            min_item = item
+            continue
+        }
+
+        if (f_score.get(item) < f_score.get(min_item)) {
+            min_item = item
+        }
+    }
+
+    return min_item
+}
+
+function _nodeIdToLongLat(data, node_id) {
+    let node = data.nodes[node_id]
+
+    return [node.long / 10000000.0, node.lat / 10000000.0]
+
+}
+
+function _reconstructPath(data, came_from, current) {
+    let total_path = [_nodeIdToLongLat(data, current)]
+    while (came_from.has(current)) {
+        current = came_from.get(current)
+        total_path.push(_nodeIdToLongLat(data, current))
+    }
+
+    return total_path
+}
+
+function _planRoute(data, start, end, debug_paths) {
+    if (start === null || end === null) {
+        return null
+    }
+
+    let start_node = data.ways[start[0]].nodes[start[1]]
+    let end_node = data.ways[end[0]].nodes[end[1]]
+
+    let open_set = [start_node]
+    let came_from = new Map()
+    let g_score = new Map();
+    g_score.set(start_node, 0)
+
+    let f_score = new Map();
+    f_score.set(start_node, _distance(data.nodes[start_node], data.nodes[end_node]))
+
+    let i = 0
+    // Limit to 50k nodes, or else we start to get unbearably slow
+    while (open_set.length != 0 && i < 200000) {
+        i += 1
+
+        let item = open_set.shift()
+
+        if (item == end_node) {
+            if (debug_paths == false) {
+                return _reconstructPath(data, came_from, item)
+            } else {
+                break
+            }
+        }
+
+        for (let neighbor of _neighbors(data, item)) {
+            let neighbor_distance = _distance(data.nodes[item], data.nodes[neighbor])
+
+            let tentative_g_score = g_score.get(item) + neighbor_distance
+
+            if (g_score.has(neighbor) == false) {
+                g_score.set(neighbor, Infinity)
+            }
+
+            if (tentative_g_score < g_score.get(neighbor)) {
+                came_from.set(neighbor, item)
+                g_score.set(neighbor, tentative_g_score)
+                f_score.set(neighbor, tentative_g_score + _distance(data.nodes[neighbor], data.nodes[end_node]))
+
+                _insertIntoOpenSet(open_set, f_score, neighbor)
+            }
+
+        }
+    }
+
+    if (debug_paths == true) {
+        let ret = []
+        for (let [key, value] of f_score) {
+            ret.push(_nodeToLongLat(data.nodes[key]))
+        }
+        return ret
+    } else {
+        return null
+    }
+}
+
+function _preprocessData(data) {
+    let node_to_way = Array(data.nodes.length)
+    for (let way_id = 0; way_id < data.ways.length; way_id++) {
+        let way = data.ways[way_id]
+        for (let i = 0; i < way.nodes.length; i++) {
+            let node_id = way.nodes[i]
+            if (node_to_way[node_id] === undefined) {
+                node_to_way[node_id] = []
+            }
+
+            node_to_way[node_id].push([way_id, i])
+        }
+    }
+
+    data.node_to_way = node_to_way;
 }
 
 class PointerTracker {
@@ -303,6 +515,10 @@ class PointerTracker {
     }
 
     _onPointerMove(e) {
+        if (_contextMenuVisible()) {
+            return
+        }
+
         let idx = this._pointerIdx(e)
 
         this.renderer.updatePointerPos(e.pageX, e.pageY)
@@ -354,9 +570,10 @@ class Renderer {
         this.scale = 10.0
         this.center = [-123.1539434, 49.2578263]
         this.data = data
-        this.selected_way_id = -1
-        this.selected_way_long = null
-        this.selected_way_lat = null
+        this.selected_way = null
+        this.start_position = null
+        this.planned_path = null
+        this.debug_paths = false
 
         let vert_shader = gl.createShader(gl.VERTEX_SHADER);
         gl.shaderSource(vert_shader, VERTEX_SHADER_SOURCE);
@@ -409,8 +626,8 @@ class Renderer {
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null)
         gl.bindBuffer(gl.ARRAY_BUFFER, null);
 
-        this.selected_way_vertex_array = gl.createVertexArray()
-        gl.bindVertexArray(this.selected_way_vertex_array)
+        this.single_point_vertex_array = gl.createVertexArray()
+        gl.bindVertexArray(this.single_point_vertex_array)
         this.waypoint_buffer = gl.createBuffer()
         gl.bindBuffer(gl.ARRAY_BUFFER, this.waypoint_buffer)
 
@@ -423,15 +640,21 @@ class Renderer {
 
         canvas_holder.onmouseenter = this._onMouseEnter.bind(this)
         canvas_holder.onmouseleave = this._onMouseLeave.bind(this)
+        canvas_holder.onclick = this._onLeftClick.bind(this)
+        canvas_holder.oncontextmenu = this._onRightClick.bind(this)
 
         document.getElementById('custom-highlight-regex').addEventListener('input', this._onCustomHighlightChanged.bind(this))
         document.getElementById('custom-highlight-color').addEventListener('input', this._onCustomHighlightChanged.bind(this))
 
+        document.getElementById('start-route').onclick = this._setStartPos.bind(this)
+        document.getElementById('clear-route').onclick = this._clearStartPos.bind(this)
+
+        document.getElementById('debug-path').onclick = () => { this.debug_paths = !this.debug_paths }
         window.requestAnimationFrame(this.render_map.bind(this))
         window.onresize = this.render_map.bind(this)
     }
 
-    render_map(timestamp) {
+    render_map() {
         // Update canvas size with window size
         this.canvas.width = document.body.clientWidth
         this.canvas.height = document.body.clientHeight
@@ -450,7 +673,11 @@ class Renderer {
         gl.uniform1f(aspect_ratio_loc, this.canvas.width / this.canvas.height)
 
         let selected_way_loc = gl.getUniformLocation(this.shader_program, "selected_way");
-        gl.uniform1i(selected_way_loc, this.selected_way_id)
+        if (this.selected_way !== null) {
+            gl.uniform1i(selected_way_loc, this.selected_way[0])
+        } else {
+            gl.uniform1i(selected_way_loc, -1)
+        }
 
         gl.clearColor(0.5, 0.5, 0.5, 0.9);
         gl.viewport(0, 0, this.canvas.width, this.canvas.height);
@@ -459,11 +686,31 @@ class Renderer {
         gl.bindVertexArray(this.vertex_array)
         gl.drawElements(gl.LINE_STRIP, this.index_buffer_length, gl.UNSIGNED_INT, 0);
 
-        if (this.selected_way_long !== null && this.selected_way_lat !== null) {
-            gl.bindVertexArray(this.selected_way_vertex_array)
-            let verts = _constructWayPointBuffer(this.selected_way_long, this.selected_way_lat)
+        if (this.selected_way !== null) {
+            gl.bindVertexArray(this.single_point_vertex_array)
+            let [long, lat] = _wayPositionToLongLat(this.data, this.selected_way)
+            let verts = _constructSinglePointBuffer(long, lat, [1.0, 0.0, 0.0])
             gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
             gl.drawArrays(gl.POINTS, 0, 1);
+            gl.bindVertexArray(null)
+        }
+
+        if (this.start_position !== null) {
+            gl.bindVertexArray(this.single_point_vertex_array)
+            let [long, lat] = _wayPositionToLongLat(this.data, this.start_position)
+            let verts = _constructSinglePointBuffer(long, lat, [0.0, 0.0, 1.0])
+            gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
+            gl.drawArrays(gl.POINTS, 0, 1);
+            gl.bindVertexArray(null)
+
+        }
+
+        if (this.planned_path !== null) {
+            gl.bindVertexArray(this.single_point_vertex_array)
+            let verts = _constructPathRenderBuffer(this.planned_path)
+            gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
+            let draw_type = (this.debug_paths == true) ? gl.POINTS : gl.LINE_STRIP
+            gl.drawArrays(draw_type, 0, this.planned_path.length);
             gl.bindVertexArray(null)
 
         }
@@ -566,33 +813,32 @@ class Renderer {
             gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
 
             let way_id = _spiralSearchWayId(pixels)
-            let [way_long, way_lat] = _findWayLongLat(this.data, way_id, long, lat) 
+            let [way_segment, way_factor] = _findWayPosition(this.data, way_id, long, lat)
             if (way_id != -1) {
-                return [way_id, way_long, way_lat]
+                return [way_id, way_segment, way_factor]
             }
 
             scale /= 2
         }
-        return [-1, null, null]
+        return null
     }
 
     updatePointerPos(x, y) {
         let [long, lat] = this._pixelToLongLat(x, y)
-        let [way_id, selected_way_long, selected_way_lat] = this._findWayNearLongLat(long, lat)
+        this.selected_way = this._findWayNearLongLat(long, lat)
         let elem = document.getElementById("pointer-lat-long")
+
+        this._setSearchEnd(this.selected_way)
 
         elem.innerHTML = ""
 
-        if (way_id != -1) {
-            for (let tag of this.data.ways[way_id].tags) {
+        if (this.selected_way != null) {
+            for (let tag of this.data.ways[this.selected_way[0]].tags) {
                 elem.innerHTML += tag
                 elem.innerHTML += "<br>"
             }
         }
         elem.innerHTML += "Lat: " + lat + "<br>Long: " + long
-        this.selected_way_id = way_id
-        this.selected_way_long = selected_way_long
-        this.selected_way_lat = selected_way_lat
         window.requestAnimationFrame(this.render_map.bind(this))
     }
 
@@ -617,7 +863,6 @@ class Renderer {
         elem.style.display = "none"
         this.selected_way_id = -1
         window.requestAnimationFrame(this.render_map.bind(this))
-
     }
 
     _onMouseEnter(e) {
@@ -642,13 +887,48 @@ class Renderer {
 
         window.requestAnimationFrame(this.render_map.bind(this))
     }
+
+    _onLeftClick(e) {
+        let context_menu = document.getElementById("context-menu")
+        context_menu.style.display = "none"
+    }
+
+    _onRightClick(e) {
+        let context_menu = document.getElementById("context-menu")
+        context_menu.style.display = "block"
+        context_menu.style.left = e.pageX  + "px"
+        context_menu.style.top = e.pageY + "px"
+        e.preventDefault()
+    }
+
+    _setStartPos() {
+        // FIXME: Ensure this runs before next pointer move
+        if (this.selected_way !== null) {
+            this.start_position = this.selected_way
+        } else {
+            this.start_position = null
+        }
+        window.requestAnimationFrame(this.render_map.bind(this))
+    }
+
+    _clearStartPos() {
+        this.start_position = null
+        this.planned_path = null
+        window.requestAnimationFrame(this.render_map.bind(this))
+    }
+
+    _setSearchEnd(way_position) {
+        this.planned_path = _planRoute(this.data, this.start_position, way_position, this.debug_paths)
+    }
 }
 
 async function init() {
     let resp = await fetch("/data.json")
     let data = await resp.json()
+    _preprocessData(data)
     let renderer = new Renderer(data)
     let pointer_tracker = new PointerTracker(renderer)
+    let debug_path_button = document.getElementById("debug-path")
 }
 
 
