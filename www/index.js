@@ -50,6 +50,8 @@ const WAY_FINDER_FRAG_SOURCE =
        fragColor = f_way_id; \
      }`
 
+const WAY_FINDER_RES = 11
+
 function _getRGB(input) {
     if (input.substr(0,1)=="#") {
     var collen=(input.length-1)/3;
@@ -149,6 +151,46 @@ function _constructMapBuffers(data) {
     return [vertices, indices]
 }
 
+function _pixelFromBuffer(pixels, x, y) {
+    let idx = 4 * (y * WAY_FINDER_RES + x)
+    let ret = pixels[idx]
+    return ret
+}
+
+function _spiralSearchWayId(pixels) {
+    center_val = Math.floor(WAY_FINDER_RES / 2)
+    for (let dist = 0; dist < center_val + 1; dist++) {
+        let lower_idx = center_val - dist
+        let higher_idx = center_val + dist
+
+        for (let x = lower_idx; x <= higher_idx; x++) {
+            let way_id = _pixelFromBuffer(pixels, x, lower_idx)
+            if (way_id != -1) {
+                return way_id
+            }
+
+            way_id = _pixelFromBuffer(pixels, x, higher_idx)
+            if (way_id != -1) {
+                return way_id
+            }
+        }
+
+        for (let y = lower_idx; y <= higher_idx; y++) {
+            let way_id = _pixelFromBuffer(pixels, lower_idx, y)
+            if (way_id != -1) {
+                return way_id
+            }
+            way_id = _pixelFromBuffer(pixels, higher_idx, y)
+            if (way_id != -1) {
+                return way_id
+            }
+        }
+    }
+
+    return -1
+
+}
+
 
 class Renderer {
     constructor(data) {
@@ -185,7 +227,7 @@ class Renderer {
 
         this.wayFinderTexture = gl.createRenderbuffer();
         gl.bindRenderbuffer(gl.RENDERBUFFER, this.wayFinderTexture)
-        gl.renderbufferStorage(gl.RENDERBUFFER, gl.R32I, 2, 2)
+        gl.renderbufferStorage(gl.RENDERBUFFER, gl.R32I, WAY_FINDER_RES, WAY_FINDER_RES)
 
         this.wayFinderBuffer = gl.createFramebuffer();
         gl.bindFramebuffer(gl.FRAMEBUFFER, this.wayFinderBuffer)
@@ -331,10 +373,9 @@ class Renderer {
         //   and latitude
         // * We use a special fragment shader that just outputs the way id
         //   directly
-        // * We render that scene to a 1x1 pixel render buffer. If there are
-        //   multiple ways in the viewport this should just pick one at random
-        // * We read back that single pixel, and do some bit shifting hackery
-        //   to extract a 32bit way id from a RGBA8 color
+        // * We render that scene to a 11x11 pixel render buffer
+        // * We iterate over the 121 pixels to find the way ID closest to the
+        //   center
         //
         // This takes around 1.2ms on machine vs the 174 I tested with the
         // simple javascript approach
@@ -353,23 +394,18 @@ class Renderer {
 
         gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.wayFinderBuffer)
 
-        gl.viewport(0, 0, 1, 1);
+        gl.viewport(0, 0, WAY_FINDER_RES, WAY_FINDER_RES);
         gl.clearBufferiv(gl.COLOR, 0, new Uint32Array([-1, -1, -1, -1]))
 
         gl.bindVertexArray(this.vertexArray)
         gl.drawElements(gl.LINE_STRIP, this.index_buffer_length, gl.UNSIGNED_INT, 0);
 
-        // Duplicate vertices and assign a way ID
-        // Set the center of the image to be where the mouse is
-        // Render a 1x1 image with scale / 100
-        // Check "color" of the output
-        let pixels = new Int32Array(4)
+        let pixels = new Int32Array(4 * WAY_FINDER_RES * WAY_FINDER_RES)
         gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.wayFinderBuffer)
-        gl.readPixels(0, 0, 1, 1, gl.RGBA_INTEGER, gl.INT, pixels)
+        gl.readPixels(0, 0, WAY_FINDER_RES, WAY_FINDER_RES, gl.RGBA_INTEGER, gl.INT, pixels)
         gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
 
-        let way_id = pixels[0]
-        return way_id
+        return _spiralSearchWayId(pixels)
     }
 
     _update_overlay(e) {
