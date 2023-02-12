@@ -1,7 +1,8 @@
 // Each degree should be scale steps 
 const VERTEX_SHADER_SOURCE =
     `#version 300 es
-     precision highp float;
+     precision highp float; \
+     precision highp int; \
      in vec2 long_lat; \
      in int way_id; \
      in vec3 v_color; \
@@ -27,6 +28,7 @@ const VERTEX_SHADER_SOURCE =
 const FRAGMENT_SHADER_SOURCE =
     `#version 300 es
      precision highp float; \
+     precision highp int; \
      flat in int f_way_id; \
      flat in int f_selected_way; \
      in vec3 f_color; \
@@ -41,7 +43,8 @@ const FRAGMENT_SHADER_SOURCE =
 
 const WAY_FINDER_FRAG_SOURCE =
     `#version 300 es
-     precision highp float;
+     precision highp float; \
+     precision highp int; \
      flat in int f_way_id; \
      out int fragColor; \
      void main(void) { \
@@ -191,6 +194,75 @@ function _spiralSearchWayId(pixels) {
 
 }
 
+class PointerTracker {
+    constructor(renderer) {
+        let canvas_holder = document.getElementById('canvas-holder')
+        canvas_holder.addEventListener('pointerdown', this._onPointerDown.bind(this))
+        canvas_holder.addEventListener('pointermove', this._onPointerMove.bind(this))
+        canvas_holder.addEventListener('pointerup', this._onPointerUp.bind(this))
+
+        this.renderer = renderer
+
+        this.down_pointers = []
+        this.scale = 1.0
+    }
+
+    _calculatePointerDistance(e1, e2) {
+        let y_dist = e2.pageY - e1.pageY
+        let y_dist_2 = y_dist * y_dist
+
+        let x_dist = e2.pageX - e1.pageX
+        let x_dist_2 = x_dist * x_dist
+        return Math.sqrt(x_dist_2 + y_dist_2)
+    }
+
+    _onPointerUp(e) {
+        let idx = this._pointerIdx(e)
+        this.down_pointers.splice(idx, 1)
+    }
+
+    _onPointerMove(e) {
+        let idx = this._pointerIdx(e)
+
+        this.renderer.updatePointerPos(e.pageX, e.pageY)
+        if (this.down_pointers.length == 1) {
+            let last_event = this.down_pointers[idx]
+            this.down_pointers[idx] = e
+
+            this.renderer.moveViewport(e.pageX, e.pageY, e.pageX - last_event.pageX, e.pageY - last_event.pageY)
+        }
+        else if (this.down_pointers.length == 2) {
+            let other_idx = (idx + 1) % 2
+            let last_event = this.down_pointers[idx]
+            let other_event = this.down_pointers[other_idx]
+            this.down_pointers[idx] = e
+            let old_distance = this._calculatePointerDistance(other_event, last_event)
+            let new_distance = this._calculatePointerDistance(other_event, e)
+            // Scale increase is a little off right now, we should set the
+            // delta in pixel space, and then set the scale and center so that
+            // the distance between fingers stays the same distance on the map...
+            // For now though this is good enough
+            let delta = (new_distance - old_distance) * 2
+            this.renderer.updateScale(e.pageX, e.pageY, delta)
+        }
+    }
+
+    _onPointerDown(e) {
+        let idx = this._pointerIdx(e)
+        this.down_pointers[idx] = e
+        this.renderer.updatePointerPos(e.pageX, e.pageY)
+    }
+
+    _pointerIdx(e) {
+        let idx = this.down_pointers.findIndex((cached_ev) => cached_ev.pointerId == e.pointerId)
+        if (idx == -1) {
+            return this.down_pointers.length
+        }
+
+        return idx
+    }
+}
+
 
 class Renderer {
     constructor(data) {
@@ -267,7 +339,6 @@ class Renderer {
         gl.bindBuffer(gl.ARRAY_BUFFER, null);
 
         let canvas_holder = document.getElementById('canvas-holder')
-        canvas_holder.onmousemove = this._onMouseMove.bind(this)
         canvas_holder.addEventListener('wheel', this._onScroll.bind(this))
 
         canvas_holder.onmouseenter = this._onMouseEnter.bind(this)
@@ -275,6 +346,9 @@ class Renderer {
 
         document.getElementById('custom-highlight-regex').addEventListener('input', this._onCustomHighlightChanged.bind(this))
         document.getElementById('custom-highlight-color').addEventListener('input', this._onCustomHighlightChanged.bind(this))
+
+        window.requestAnimationFrame(this.render_map.bind(this))
+        window.onresize = this.render_map.bind(this)
     }
 
     render_map(timestamp) {
@@ -306,8 +380,8 @@ class Renderer {
         gl.drawElements(gl.LINE_STRIP, this.index_buffer_length, gl.UNSIGNED_INT, 0);
     }
 
-    _onScroll(e) {
-        let [mouse_long, mouse_lat] = this._pixelToLongLat(e.pageX, e.pageY)
+    updateScale(x, y, delta) {
+        let [mouse_long, mouse_lat] = this._pixelToLongLat(x, y)
 
         // Scale needs to increase faster as we get closer, and always needs to
         // be above 0. Pick a f(s, x) where 
@@ -319,33 +393,32 @@ class Renderer {
         // Hand wavey, multiplying by an exponential function seems to feel
         // fine. No mathematical reason to use this over anything else that
         // satisfies the above constraints
-        this.scale *= Math.pow(1.001, -e.deltaY)
+        this.scale *= Math.pow(1.001, delta)
 
         // Adjust center so that at the new scale, the pointer stays at the
         // same latitude and longitude
-        let [new_mouse_long, new_mouse_lat] = this._pixelToLongLat(e.pageX, e.pageY)
+        let [new_mouse_long, new_mouse_lat] = this._pixelToLongLat(x, y)
         this.center[0] -= new_mouse_long - mouse_long
         this.center[1] -= new_mouse_lat - mouse_lat
         window.requestAnimationFrame(this.render_map.bind(this))
+    }
+
+    _onScroll(e) {
+        this.updateScale(e.pageX, e.pageY, -e.deltaY)
         return true
     }
 
-    _onMouseMove(e) {
-        this._update_overlay(e)
-        if (e.buttons == 0) {
-            window.requestAnimationFrame(this.render_map.bind(this))
-            return
-        }
-
+    moveViewport(x, y, old_x, old_y) {
         let [start_long, start_lat] = this._pixelToLongLat(
-            e.pageX + e.movementX,
-            e.pageY + e.movementY)
+            x - old_x,
+            y - old_y)
 
-        let [end_long, end_lat] = this._pixelToLongLat(e.pageX, e.pageY)
+        let [end_long, end_lat] = this._pixelToLongLat(x, y)
         let x_movement_long = end_long - start_long
         let y_movement_lat = end_lat - start_lat
-        this.center[0] += x_movement_long
-        this.center[1] += y_movement_lat
+        this.center[0] -= x_movement_long
+        this.center[1] -= y_movement_lat
+
         window.requestAnimationFrame(this.render_map.bind(this))
     }
 
@@ -408,9 +481,9 @@ class Renderer {
         return _spiralSearchWayId(pixels)
     }
 
-    _update_overlay(e) {
-        let [x, y] = this._pixelToLongLat(e.pageX, e.pageY)
-        let way_id = this._findTagForLongLat(x, y)
+    updatePointerPos(x, y) {
+        let [long, lat] = this._pixelToLongLat(x, y)
+        let way_id = this._findTagForLongLat(long, lat)
         let elem = document.getElementById("pointer-lat-long")
 
         elem.innerHTML = ""
@@ -421,8 +494,9 @@ class Renderer {
                 elem.innerHTML += "<br>"
             }
         }
-        elem.innerHTML += "Lat: " + y + "<br>Long: " + x
+        elem.innerHTML += "Lat: " + lat + "<br>Long: " + long
         this.selected_way_id = way_id
+        window.requestAnimationFrame(this.render_map.bind(this))
     }
 
     _pixelToLongLat(x, y) {
@@ -455,7 +529,6 @@ class Renderer {
     }
 
     _onCustomHighlightChanged() {
-        console.log("Recoloring")
         let [vertices, indices] = _constructMapBuffers(this.data)
         let gl = this.gl
 
@@ -478,8 +551,7 @@ async function init() {
     let resp = await fetch("/data.json")
     let data = await resp.json()
     let renderer = new Renderer(data)
-    window.requestAnimationFrame(renderer.render_map.bind(renderer))
-    window.onresize = renderer.render_map.bind(renderer)
+    let pointer_tracker = new PointerTracker(renderer)
 }
 
 
