@@ -20,6 +20,7 @@ const VERTEX_SHADER_SOURCE =
          vec2 pos = (long_lat - center) * scale; \
          pos.x = pos.x * cos(lat_rad) / aspect_ratio; \
          gl_Position = vec4(pos, 0.1, 1.0); \
+         gl_PointSize = 5.0; \
          f_way_id = way_id; \
          f_selected_way = selected_way; \
          f_color = v_color; \
@@ -154,6 +155,22 @@ function _constructMapBuffers(data) {
     return [vertices, indices]
 }
 
+function _constructWayPointBuffer(long, lat) {
+    let vertices = new ArrayBuffer(24)
+    let float_vertices = new Float32Array(vertices)
+    let int_vertices = new Int32Array(vertices)
+
+    float_vertices[0] = long
+    float_vertices[1] = lat
+    int_vertices[2] = -1
+    // Color
+    float_vertices[3] = 1.0
+    float_vertices[4] = 0.0
+    float_vertices[5] = 0.0
+
+    return vertices
+}
+
 function _pixelFromBuffer(pixels, x, y) {
     let idx = 4 * (y * WAY_FINDER_RES + x)
     let ret = pixels[idx]
@@ -191,7 +208,69 @@ function _spiralSearchWayId(pixels) {
     }
 
     return -1
+}
 
+
+function _findWayLongLat(data, way_id, long, lat) {
+    if (way_id == -1) {
+        return [null, null]
+    }
+
+    // Distance fn for line
+    // dist([0, 1]) = 
+    // x = x1 + (x2 - x1) * i
+    // y = y1 + (y2 - y1) * i
+    // dist_2 = x * x + y * y
+    // Walk the line in 10% chunks, find the shortest distance
+
+    let min_dist_2 = Infinity
+    let min_dist_long = null
+    let min_dist_lat = null
+
+    // Data is in decimicro degs
+
+    let way_nodes = data.ways[way_id].nodes
+    for (let way_segment_it = 0;
+             way_segment_it < way_nodes.length - 1;
+             way_segment_it++) {
+        let n1 = data.nodes[way_nodes[way_segment_it]]
+        let n2 = data.nodes[way_nodes[way_segment_it + 1]]
+
+        for (let i = 0.0; i <= 1.0; i += 0.1) {
+            let way_long = (n2.long - n1.long) * i + n1.long
+            let way_lat = (n2.lat - n1.lat) * i + n1.lat
+            way_long /= 10000000.0
+            way_lat /= 10000000.0
+
+            let long_dist = way_long - long
+            let lat_dist = way_lat - lat
+
+            let dist_2 = long_dist * long_dist + lat_dist * lat_dist
+            if (dist_2 < min_dist_2) {
+                min_dist_2 = dist_2
+                min_dist_long = way_long
+                min_dist_lat = way_lat
+            }
+        }
+    }
+
+    return [min_dist_long, min_dist_lat]
+}
+
+function _setVertexAttribPointers(gl, program) {
+    let long_lat_loc = gl.getAttribLocation(program, "long_lat");
+    let way_id_loc = gl.getAttribLocation(program, "way_id");
+    let color_loc = gl.getAttribLocation(program, "v_color");
+
+    let num_elements = 6
+    gl.vertexAttribPointer(long_lat_loc, 2, gl.FLOAT, false, 4 * num_elements, 0);
+    gl.enableVertexAttribArray(long_lat_loc);
+
+    gl.vertexAttribIPointer(way_id_loc, 1, gl.INT, 4 * num_elements, 8);
+    gl.enableVertexAttribArray(way_id_loc);
+
+    gl.vertexAttribPointer(color_loc, 3, gl.FLOAT, false, 4 * num_elements, 12);
+    gl.enableVertexAttribArray(color_loc);
 }
 
 class PointerTracker {
@@ -274,6 +353,8 @@ class Renderer {
         this.center = [-123.1539434, 49.2578263]
         this.data = data
         this.selected_way_id = -1
+        this.selected_way_long = null
+        this.selected_way_lat = null
 
         let vert_shader = gl.createShader(gl.VERTEX_SHADER);
         gl.shaderSource(vert_shader, VERTEX_SHADER_SOURCE);
@@ -320,23 +401,20 @@ class Renderer {
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.index_buffer);
         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
 
-        let long_lat_loc = gl.getAttribLocation(this.shader_program, "long_lat");
-        let way_id_loc = gl.getAttribLocation(this.shader_program, "way_id");
-        let color_loc = gl.getAttribLocation(this.shader_program, "v_color");
-
-        let num_elements = 6
-        gl.vertexAttribPointer(long_lat_loc, 2, gl.FLOAT, false, 4 * num_elements, 0);
-        gl.enableVertexAttribArray(long_lat_loc);
-
-        gl.vertexAttribIPointer(way_id_loc, 1, gl.INT, 4 * num_elements, 8);
-        gl.enableVertexAttribArray(way_id_loc);
-
-        gl.vertexAttribPointer(color_loc, 3, gl.FLOAT, false, 4 * num_elements, 12);
-        gl.enableVertexAttribArray(color_loc);
+        _setVertexAttribPointers(gl, this.shader_program)
 
         gl.bindVertexArray(null)
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null)
         gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
+        this.selected_way_vertex_array = gl.createVertexArray()
+        gl.bindVertexArray(this.selected_way_vertex_array)
+        this.waypoint_buffer = gl.createBuffer()
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.waypoint_buffer)
+
+        _setVertexAttribPointers(gl, this.shader_program)
+
+        gl.bindVertexArray(null)
 
         let canvas_holder = document.getElementById('canvas-holder')
         canvas_holder.addEventListener('wheel', this._onScroll.bind(this))
@@ -378,6 +456,15 @@ class Renderer {
 
         gl.bindVertexArray(this.vertex_array)
         gl.drawElements(gl.LINE_STRIP, this.index_buffer_length, gl.UNSIGNED_INT, 0);
+
+        if (this.selected_way_long !== null && this.selected_way_lat !== null) {
+            gl.bindVertexArray(this.selected_way_vertex_array)
+            let verts = _constructWayPointBuffer(this.selected_way_long, this.selected_way_lat)
+            gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
+            gl.drawArrays(gl.POINTS, 0, 1);
+            gl.bindVertexArray(null)
+
+        }
     }
 
     updateScale(x, y, delta) {
@@ -422,7 +509,7 @@ class Renderer {
         window.requestAnimationFrame(this.render_map.bind(this))
     }
 
-    _findTagForLongLat(long, lat) {
+    _findWayNearLongLat(long, lat) {
 
         // This is what I would consider to be a colossal hack
         //
@@ -449,41 +536,47 @@ class Renderer {
         // * We render that scene to a 11x11 pixel render buffer
         // * We iterate over the 121 pixels to find the way ID closest to the
         //   center
-        //
-        // This takes around 1.2ms on machine vs the 174 I tested with the
-        // simple javascript approach
+        // * If we don't find anything we zoom out and try again
 
         let gl = this.gl;
         gl.useProgram(this.way_finder_program);
 
         let scale_loc = gl.getUniformLocation(this.way_finder_program, "scale");
-        gl.uniform1f(scale_loc, this.scale * 50)
-
         let center_loc = gl.getUniformLocation(this.way_finder_program, "center");
-        gl.uniform2f(center_loc, long, lat)
-
         let aspect_ratio_loc = gl.getUniformLocation(this.way_finder_program, "aspect_ratio");
+        gl.uniform2f(center_loc, long, lat)
         gl.uniform1f(aspect_ratio_loc, this.canvas.width / this.canvas.height)
 
-        gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.way_finder_frame_buffer)
-
         gl.viewport(0, 0, WAY_FINDER_RES, WAY_FINDER_RES);
-        gl.clearBufferiv(gl.COLOR, 0, new Uint32Array([-1, -1, -1, -1]))
-
         gl.bindVertexArray(this.vertex_array)
-        gl.drawElements(gl.LINE_STRIP, this.index_buffer_length, gl.UNSIGNED_INT, 0);
 
-        let pixels = new Int32Array(4 * WAY_FINDER_RES * WAY_FINDER_RES)
-        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.way_finder_frame_buffer)
-        gl.readPixels(0, 0, WAY_FINDER_RES, WAY_FINDER_RES, gl.RGBA_INTEGER, gl.INT, pixels)
-        gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+        let scale = this.scale * 50
+        // Arbitrary cutoff
+        // NOTE: The farther away from the cursor we get, the less accurate this becomes
+        while (scale > 50.0) {
+            gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.way_finder_frame_buffer)
+            gl.uniform1f(scale_loc, scale)
+            gl.clearBufferiv(gl.COLOR, 0, new Uint32Array([-1, -1, -1, -1]))
+            gl.drawElements(gl.LINE_STRIP, this.index_buffer_length, gl.UNSIGNED_INT, 0);
+            let pixels = new Int32Array(4 * WAY_FINDER_RES * WAY_FINDER_RES)
+            gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.way_finder_frame_buffer)
+            gl.readPixels(0, 0, WAY_FINDER_RES, WAY_FINDER_RES, gl.RGBA_INTEGER, gl.INT, pixels)
+            gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
 
-        return _spiralSearchWayId(pixels)
+            let way_id = _spiralSearchWayId(pixels)
+            let [way_long, way_lat] = _findWayLongLat(this.data, way_id, long, lat) 
+            if (way_id != -1) {
+                return [way_id, way_long, way_lat]
+            }
+
+            scale /= 2
+        }
+        return [-1, null, null]
     }
 
     updatePointerPos(x, y) {
         let [long, lat] = this._pixelToLongLat(x, y)
-        let way_id = this._findTagForLongLat(long, lat)
+        let [way_id, selected_way_long, selected_way_lat] = this._findWayNearLongLat(long, lat)
         let elem = document.getElementById("pointer-lat-long")
 
         elem.innerHTML = ""
@@ -496,6 +589,8 @@ class Renderer {
         }
         elem.innerHTML += "Lat: " + lat + "<br>Long: " + long
         this.selected_way_id = way_id
+        this.selected_way_long = selected_way_long
+        this.selected_way_lat = selected_way_lat
         window.requestAnimationFrame(this.render_map.bind(this))
     }
 
