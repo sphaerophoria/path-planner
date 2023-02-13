@@ -426,7 +426,8 @@ function _planRoute(data, start, end, debug_paths) {
 
     let i = 0
     // Limit to 50k nodes, or else we start to get unbearably slow
-    while (open_set.length != 0 && i < 200000) {
+    let max_attempts = document.getElementById("max-path-nodes").value
+    while (open_set.length != 0 && i < max_attempts) {
         i += 1
 
         let item = open_set.shift()
