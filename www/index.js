@@ -1,3 +1,5 @@
+"use strict"
+
 // Each degree should be scale steps 
 const VERTEX_SHADER_SOURCE =
     `#version 300 es
@@ -75,7 +77,7 @@ function _wayToColor(way) {
 
     const re = new RegExp(custom_regex)
     let deferred_color = null
-    for (tag of way.tags) {
+    for (let tag of way.tags) {
         if (custom_regex.length > 3 && tag.match(re)) {
             return custom_color
         }
@@ -178,7 +180,7 @@ function _pixelFromBuffer(pixels, x, y) {
 }
 
 function _spiralSearchWayId(pixels) {
-    center_val = Math.floor(WAY_FINDER_RES / 2)
+    let center_val = Math.floor(WAY_FINDER_RES / 2)
     for (let dist = 0; dist < center_val + 1; dist++) {
         let lower_idx = center_val - dist
         let higher_idx = center_val + dist
