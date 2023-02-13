@@ -14,7 +14,7 @@ const VERTEX_SHADER_SOURCE =
      out vec3 f_color; \
      uniform float scale; \
      uniform vec2 center; \
-     uniform float aspect_ratio; \ 
+     uniform float aspect_ratio; \
      uniform int selected_way; \
 
      void main(void) { \
@@ -57,6 +57,11 @@ const WAY_FINDER_FRAG_SOURCE =
      }`
 
 const WAY_FINDER_RES = 11
+
+function _contextMenuVisible() {
+    let context_menu = document.getElementById("context-menu")
+    return window.getComputedStyle(context_menu).display == "block"
+}
 
 function _getRGB(input) {
     if (input.substr(0,1)=="#") {
@@ -157,7 +162,7 @@ function _constructMapBuffers(data) {
     return [vertices, indices]
 }
 
-function _constructWayPointBuffer(long, lat) {
+function _constructSinglePointBuffer(long, lat, color) {
     let vertices = new ArrayBuffer(24)
     let float_vertices = new Float32Array(vertices)
     let int_vertices = new Int32Array(vertices)
@@ -166,9 +171,32 @@ function _constructWayPointBuffer(long, lat) {
     float_vertices[1] = lat
     int_vertices[2] = -1
     // Color
-    float_vertices[3] = 1.0
-    float_vertices[4] = 0.0
-    float_vertices[5] = 0.0
+    float_vertices[3] = color[0]
+    float_vertices[4] = color[1]
+    float_vertices[5] = color[2]
+
+    return vertices
+}
+
+function _constructPathRenderBuffer(path) {
+    let vertices = new ArrayBuffer(24 * path.length)
+    let float_vertices = new Float32Array(vertices)
+    let int_vertices = new Int32Array(vertices)
+
+    for (let i = 0; i < path.length; i++) {
+        console.log(path)
+        let long = path[i][0]
+        let lat = path[i][1]
+
+        float_vertices[6 * i] = long
+        float_vertices[6 * i + 1] = lat
+        int_vertices[6 * i + 2] = -1
+        // Color
+        float_vertices[6 * i + 3] = 0.0
+        float_vertices[6 * i + 4] = 0.0
+        float_vertices[6 * i + 5] = 1.0
+
+    }
 
     return vertices
 }
@@ -213,7 +241,7 @@ function _spiralSearchWayId(pixels) {
 }
 
 
-function _findWayLongLat(data, way_id, long, lat) {
+function _findWayPosition(data, way_id, long, lat) {
     if (way_id == -1) {
         return [null, null]
     }
@@ -226,6 +254,8 @@ function _findWayLongLat(data, way_id, long, lat) {
     // Walk the line in 10% chunks, find the shortest distance
 
     let min_dist_2 = Infinity
+    let min_dist_node = null
+    let min_dist_factor = null
     let min_dist_long = null
     let min_dist_lat = null
 
@@ -250,13 +280,29 @@ function _findWayLongLat(data, way_id, long, lat) {
             let dist_2 = long_dist * long_dist + lat_dist * lat_dist
             if (dist_2 < min_dist_2) {
                 min_dist_2 = dist_2
+                min_dist_node = way_segment_it
+                min_dist_factor = i
                 min_dist_long = way_long
                 min_dist_lat = way_lat
             }
         }
     }
 
-    return [min_dist_long, min_dist_lat]
+    return [min_dist_node, min_dist_factor]
+}
+
+function _wayPositionToLongLat(data, way_position) {
+    let way = data.ways[way_position[0]]
+    let n1_id = way.nodes[way_position[1]]
+    let n2_id = way.nodes[way_position[1] + 1]
+    let factor = way_position[2]
+    let n1 = data.nodes[n1_id]
+    let n2 = data.nodes[n2_id]
+    
+    let long_decimicro = (n2.long - n1.long) * factor + n1.long
+    let lat_decimicro = (n2.lat - n1.lat) * factor + n1.lat
+
+    return [long_decimicro / 10000000.0, lat_decimicro / 10000000.0]
 }
 
 function _setVertexAttribPointers(gl, program) {
@@ -273,6 +319,16 @@ function _setVertexAttribPointers(gl, program) {
 
     gl.vertexAttribPointer(color_loc, 3, gl.FLOAT, false, 4 * num_elements, 12);
     gl.enableVertexAttribArray(color_loc);
+}
+
+
+function _planRoute(data, start, end) {
+    if (start !== null) {
+        return [_wayPositionToLongLat(data, start), _wayPositionToLongLat(data, end)]
+    } else {
+        return null
+    }
+
 }
 
 class PointerTracker {
@@ -303,6 +359,10 @@ class PointerTracker {
     }
 
     _onPointerMove(e) {
+        if (_contextMenuVisible()) {
+            return
+        }
+
         let idx = this._pointerIdx(e)
 
         this.renderer.updatePointerPos(e.pageX, e.pageY)
@@ -354,9 +414,9 @@ class Renderer {
         this.scale = 10.0
         this.center = [-123.1539434, 49.2578263]
         this.data = data
-        this.selected_way_id = -1
-        this.selected_way_long = null
-        this.selected_way_lat = null
+        this.selected_way = null
+        this.start_position = null
+        this.planned_path = null
 
         let vert_shader = gl.createShader(gl.VERTEX_SHADER);
         gl.shaderSource(vert_shader, VERTEX_SHADER_SOURCE);
@@ -409,8 +469,8 @@ class Renderer {
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null)
         gl.bindBuffer(gl.ARRAY_BUFFER, null);
 
-        this.selected_way_vertex_array = gl.createVertexArray()
-        gl.bindVertexArray(this.selected_way_vertex_array)
+        this.single_point_vertex_array = gl.createVertexArray()
+        gl.bindVertexArray(this.single_point_vertex_array)
         this.waypoint_buffer = gl.createBuffer()
         gl.bindBuffer(gl.ARRAY_BUFFER, this.waypoint_buffer)
 
@@ -429,11 +489,14 @@ class Renderer {
         document.getElementById('custom-highlight-regex').addEventListener('input', this._onCustomHighlightChanged.bind(this))
         document.getElementById('custom-highlight-color').addEventListener('input', this._onCustomHighlightChanged.bind(this))
 
+        document.getElementById('start-route').onclick = this._setStartPos.bind(this)
+        document.getElementById('clear-route').onclick = this._clearStartPos.bind(this)
+
         window.requestAnimationFrame(this.render_map.bind(this))
         window.onresize = this.render_map.bind(this)
     }
 
-    render_map(timestamp) {
+    render_map() {
         // Update canvas size with window size
         this.canvas.width = document.body.clientWidth
         this.canvas.height = document.body.clientHeight
@@ -452,7 +515,11 @@ class Renderer {
         gl.uniform1f(aspect_ratio_loc, this.canvas.width / this.canvas.height)
 
         let selected_way_loc = gl.getUniformLocation(this.shader_program, "selected_way");
-        gl.uniform1i(selected_way_loc, this.selected_way_id)
+        if (this.selected_way !== null) {
+            gl.uniform1i(selected_way_loc, this.selected_way[0])
+        } else {
+            gl.uniform1i(selected_way_loc, -1)
+        }
 
         gl.clearColor(0.5, 0.5, 0.5, 0.9);
         gl.viewport(0, 0, this.canvas.width, this.canvas.height);
@@ -461,11 +528,31 @@ class Renderer {
         gl.bindVertexArray(this.vertex_array)
         gl.drawElements(gl.LINE_STRIP, this.index_buffer_length, gl.UNSIGNED_INT, 0);
 
-        if (this.selected_way_long !== null && this.selected_way_lat !== null) {
-            gl.bindVertexArray(this.selected_way_vertex_array)
-            let verts = _constructWayPointBuffer(this.selected_way_long, this.selected_way_lat)
+        if (this.selected_way !== null) {
+            gl.bindVertexArray(this.single_point_vertex_array)
+            let [long, lat] = _wayPositionToLongLat(this.data, this.selected_way)
+            console.log(long, lat)
+            let verts = _constructSinglePointBuffer(long, lat, [1.0, 0.0, 0.0])
             gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
             gl.drawArrays(gl.POINTS, 0, 1);
+            gl.bindVertexArray(null)
+        }
+
+        if (this.start_position !== null) {
+            gl.bindVertexArray(this.single_point_vertex_array)
+            let [long, lat] = _wayPositionToLongLat(this.data, this.start_position)
+            let verts = _constructSinglePointBuffer(long, lat, [0.0, 0.0, 1.0])
+            gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
+            gl.drawArrays(gl.POINTS, 0, 1);
+            gl.bindVertexArray(null)
+
+        }
+
+        if (this.planned_path !== null) {
+            gl.bindVertexArray(this.single_point_vertex_array)
+            let verts = _constructPathRenderBuffer(this.planned_path)
+            gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
+            gl.drawArrays(gl.LINE_STRIP, 0, this.planned_path.length);
             gl.bindVertexArray(null)
 
         }
@@ -568,9 +655,9 @@ class Renderer {
             gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
 
             let way_id = _spiralSearchWayId(pixels)
-            let [way_long, way_lat] = _findWayLongLat(this.data, way_id, long, lat) 
+            let [way_segment, way_factor] = _findWayPosition(this.data, way_id, long, lat) 
             if (way_id != -1) {
-                return [way_id, way_long, way_lat]
+                return [way_id, way_segment, way_factor]
             }
 
             scale /= 2
@@ -580,8 +667,11 @@ class Renderer {
 
     updatePointerPos(x, y) {
         let [long, lat] = this._pixelToLongLat(x, y)
-        let [way_id, selected_way_long, selected_way_lat] = this._findWayNearLongLat(long, lat)
+        let [way_id, way_segment, way_factor] = this._findWayNearLongLat(long, lat)
         let elem = document.getElementById("pointer-lat-long")
+
+        this.selected_way = [way_id, way_segment, way_factor]
+        this._setSearchEnd(this.selected_way)
 
         elem.innerHTML = ""
 
@@ -592,9 +682,6 @@ class Renderer {
             }
         }
         elem.innerHTML += "Lat: " + lat + "<br>Long: " + long
-        this.selected_way_id = way_id
-        this.selected_way_long = selected_way_long
-        this.selected_way_lat = selected_way_lat
         window.requestAnimationFrame(this.render_map.bind(this))
     }
 
@@ -619,7 +706,6 @@ class Renderer {
         elem.style.display = "none"
         this.selected_way_id = -1
         window.requestAnimationFrame(this.render_map.bind(this))
-
     }
 
     _onMouseEnter(e) {
@@ -655,8 +741,28 @@ class Renderer {
         let context_menu = document.getElementById("context-menu")
         context_menu.style.display = "block"
         context_menu.style.left = e.pageX  + "px"
-        context_menu.style.top = e.pageY  + "px"
+        context_menu.style.top = e.pageY + "px"
         e.preventDefault()
+    }
+
+    _setStartPos() {
+        // FIXME: Ensure this runs before next pointer move
+        if (this.selected_way !== null) {
+            this.start_position = this.selected_way
+        } else {
+            this.start_position = null
+        }
+        window.requestAnimationFrame(this.render_map.bind(this))
+    }
+
+    _clearStartPos() {
+        this.start_position = null
+        this.planned_path = null
+        window.requestAnimationFrame(this.render_map.bind(this))
+    }
+
+    _setSearchEnd(way_position) {
+        this.planned_path = _planRoute(this.data, this.start_position, way_position)
     }
 }
 

@@ -10,18 +10,18 @@
   <body>
     <noscript>This page javascript content, please enable javascript in your browser.</noscript>
     <div id="canvas-holder" class="canvas">
+      <div id="context-menu" class="context-menu overlay-text">
+        <ul>
+          <li id="start-route">Start route</li>
+          <li id="clear-route">Clear start position</li>
+        </ul>
+      </div>
       <div id="overlay" class="overlay">
         <p class="overlay-text" id="pointer-lat-long"></p>
 
         <label for="custom-highlight-regex" class="overlay-text">Custom highlight regex</label>
         <input id="custom-highlight-regex" class="overlay-input" type="text"></input>
         <input id="custom-highlight-color" class="overlay-input" type="color"></input>
-      </div>
-      <div id="context-menu" class="context-menu overlay-text">
-        <ul>
-          <li id="start-route">Start route</li>
-          <li id="end-route">End route</li>
-        </ul>
       </div>
       <canvas id="canvas" class="canvas"></canvas>
     </div>
