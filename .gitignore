@@ -1,2 +1,3 @@
 /daemon/target
-/www/data.json
+/client/www
+/client/node_modules
