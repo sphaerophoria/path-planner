@@ -1,3 +1,5 @@
+const wasm = import('./rust/pkg')
+
 "use strict"
 
 // Each degree should be scale steps 
@@ -316,159 +318,8 @@ function _setVertexAttribPointers(gl, program) {
     gl.enableVertexAttribArray(color_loc);
 }
 
-
-function _neighbors(data, node_id) {
-    let neighbors = []
-    for (let node_to_way of data.node_to_way[node_id]) {
-        let [way_id, sub_id] = node_to_way
-        let way = data.ways[way_id]
-        if (sub_id + 1 != way.nodes.length) {
-            neighbors.push(way.nodes[sub_id + 1])
-        }
-
-        if (sub_id != 0) {
-            neighbors.push(way.nodes[sub_id - 1])
-        }
-    }
-
-    return neighbors
-}
-
 function _nodeToLongLat(node) {
     return [node.long / 10000000.0, node.lat / 10000000.0]
-}
-
-function _distance(n1, n2) {
-    let long_dist = (n2.long - n1.long)
-    let lat_dist = (n2.lat - n1.lat)
-
-    long_dist = long_dist * Math.cos(n2.lat / 10000000.0 * 3.1415962 / 180.0)
-    long_dist /= 10000000.0
-    lat_dist /= 10000000.0
-
-    return Math.sqrt(long_dist * long_dist + lat_dist * lat_dist)
-}
-
-function _insertIntoOpenSet(open_set, f_scores, val) {
-    if (open_set.length == 0) {
-        open_set.push(val)
-    }
-
-    let last_less = 0
-    let last_greater = open_set.length
-
-    let val_score = f_scores.get(val)
-
-    while (last_greater - last_less > 1) {
-        let test_idx = Math.floor((last_less + last_greater) / 2)
-        let test_score = f_scores.get(open_set[test_idx])
-        if (test_score < val_score) {
-            last_less = test_idx
-        }
-        // Bias towards inserting at front
-        if (test_score >= val_score) {
-            last_greater = test_idx
-        }
-    }
-
-
-    open_set.splice(last_less, 0, val)
-}
-
-function _minItem(open_set, f_score) {
-    let min_item = null
-    for (let item of open_set) {
-        if (min_item === null) {
-            min_item = item
-            continue
-        }
-
-        if (f_score.get(item) < f_score.get(min_item)) {
-            min_item = item
-        }
-    }
-
-    return min_item
-}
-
-function _nodeIdToLongLat(data, node_id) {
-    let node = data.nodes[node_id]
-
-    return [node.long / 10000000.0, node.lat / 10000000.0]
-
-}
-
-function _reconstructPath(data, came_from, current) {
-    let total_path = [_nodeIdToLongLat(data, current)]
-    while (came_from.has(current)) {
-        current = came_from.get(current)
-        total_path.push(_nodeIdToLongLat(data, current))
-    }
-
-    return total_path
-}
-
-function _planRoute(data, start, end, debug_paths) {
-    if (start === null || end === null) {
-        return null
-    }
-
-    let start_node = data.ways[start[0]].nodes[start[1]]
-    let end_node = data.ways[end[0]].nodes[end[1]]
-
-    let open_set = [start_node]
-    let came_from = new Map()
-    let g_score = new Map();
-    g_score.set(start_node, 0)
-
-    let f_score = new Map();
-    f_score.set(start_node, _distance(data.nodes[start_node], data.nodes[end_node]))
-
-    let i = 0
-    // Limit to 50k nodes, or else we start to get unbearably slow
-    let max_attempts = document.getElementById("max-path-nodes").value
-    while (open_set.length != 0 && i < max_attempts) {
-        i += 1
-
-        let item = open_set.shift()
-
-        if (item == end_node) {
-            if (debug_paths == false) {
-                return _reconstructPath(data, came_from, item)
-            } else {
-                break
-            }
-        }
-
-        for (let neighbor of _neighbors(data, item)) {
-            let neighbor_distance = _distance(data.nodes[item], data.nodes[neighbor])
-
-            let tentative_g_score = g_score.get(item) + neighbor_distance
-
-            if (g_score.has(neighbor) == false) {
-                g_score.set(neighbor, Infinity)
-            }
-
-            if (tentative_g_score < g_score.get(neighbor)) {
-                came_from.set(neighbor, item)
-                g_score.set(neighbor, tentative_g_score)
-                f_score.set(neighbor, tentative_g_score + _distance(data.nodes[neighbor], data.nodes[end_node]))
-
-                _insertIntoOpenSet(open_set, f_score, neighbor)
-            }
-
-        }
-    }
-
-    if (debug_paths == true) {
-        let ret = []
-        for (let [key, value] of f_score) {
-            ret.push(_nodeToLongLat(data.nodes[key]))
-        }
-        return ret
-    } else {
-        return null
-    }
 }
 
 function _preprocessData(data) {
@@ -563,7 +414,7 @@ class PointerTracker {
 
 
 class Renderer {
-    constructor(data) {
+    constructor(data, path_planner) {
         this.canvas = document.getElementById('canvas');
         this.gl = canvas.getContext('webgl2');
 
@@ -575,6 +426,7 @@ class Renderer {
         this.start_position = null
         this.planned_path = null
         this.debug_paths = false
+        this.path_planner = path_planner
 
         let vert_shader = gl.createShader(gl.VERTEX_SHADER);
         gl.shaderSource(vert_shader, VERTEX_SHADER_SOURCE);
@@ -919,17 +771,27 @@ class Renderer {
     }
 
     _setSearchEnd(way_position) {
-        this.planned_path = _planRoute(this.data, this.start_position, way_position, this.debug_paths)
+        if (this.start_position === null || way_position === null) {
+            this.planned_path = null;
+        } else {
+            this.planned_path = this.path_planner.plan_path(this.start_position, way_position, this.debug_paths)
+        }
     }
 }
 
 async function init() {
     let resp = await fetch("/data.json")
     let data = await resp.json()
+
+    let m = await wasm;
+    m.init();
+
     _preprocessData(data)
-    let renderer = new Renderer(data)
+    let path_planner = new m.PathPlanner(data);
+    let renderer = new Renderer(data, path_planner)
     let pointer_tracker = new PointerTracker(renderer)
     let debug_path_button = document.getElementById("debug-path")
+
 }
 
 

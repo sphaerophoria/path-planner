@@ -1,3 +1,4 @@
 /daemon/target
 /client/www
 /client/node_modules
+/client/src/rust/target

@@ -2,7 +2,7 @@ with import (fetchTarball https://github.com/NixOS/nixpkgs/archive/81c6c120e6f84
 
 pkgs.mkShell {
   buildInputs = with pkgs; [
-    rustup  rust-analyzer nodePackages_latest.vscode-langservers-extracted nodePackages_latest.eslint jsbeautifier nodejs
+    rustup  rust-analyzer nodePackages_latest.vscode-langservers-extracted nodePackages_latest.eslint jsbeautifier nodejs wasm-pack binaryen
   ];
 }
 
