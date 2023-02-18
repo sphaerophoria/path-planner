@@ -1,187 +1,120 @@
-use serde::{Serialize, Deserialize};
-use std::{
-    cmp::Reverse,
-    collections::{HashMap, BinaryHeap}
-};
+use glow::HasContext;
+use path_planner::{Color, PixelCoord, PixelOffset, Size};
+use std::sync::Arc;
 use wasm_bindgen::prelude::*;
-
-#[derive(Deserialize)]
-struct Node {
-    lat: i32,
-    long: i32,
-}
-
-#[derive(Deserialize)]
-struct Way {
-    nodes: Vec<usize>,
-    tags: Vec<String>
-}
-
-#[derive(Deserialize)]
-struct Data {
-    nodes: Vec<Node>,
-    ways: Vec<Way>,
-    node_to_way: Vec<Vec<Vec<usize>>>
-}
-
-#[derive(Serialize)]
-struct PlannedPath(Vec<(f32, f32)>);
-
 
 #[wasm_bindgen]
 pub fn init() {
     wasm_logger::init(Default::default());
 }
 
-
 #[wasm_bindgen]
-pub struct PathPlanner {
-    data: Data,
+pub struct App {
+    inner: path_planner::App,
+    canvas: web_sys::HtmlCanvasElement,
+    gl: Arc<glow::Context>,
 }
 
 #[wasm_bindgen]
-impl PathPlanner {
+impl App {
     #[wasm_bindgen(constructor)]
-    pub fn new(data: JsValue) -> std::result::Result<PathPlanner, JsValue> {
-        let data: Data = serde_wasm_bindgen::from_value(data)?;
-        Ok(PathPlanner {
-            data,
+    pub fn new(canvas: JsValue, data: JsValue) -> std::result::Result<App, JsValue> {
+        let canvas: web_sys::HtmlCanvasElement = canvas
+            .dyn_into::<web_sys::HtmlCanvasElement>()
+            .map_err(|_| ())
+            .unwrap();
+
+        let webgl2_context = canvas
+            .get_context("webgl2")
+            .unwrap()
+            .unwrap()
+            .dyn_into::<web_sys::WebGl2RenderingContext>()
+            .unwrap();
+
+        let gl = Arc::new(glow::Context::from_webgl2_context(webgl2_context));
+
+        let data = serde_wasm_bindgen::from_value(data).unwrap();
+        let inner = path_planner::App::new(Arc::clone(&gl), data)
+            .map_err(|e| JsValue::from_str(&format!("{:?}", e)))?;
+
+        Ok(App {
+            inner,
+            canvas,
+            gl,
         })
     }
 
-    #[wasm_bindgen]
-    pub fn plan_path(&self, start: &[usize], end: &[usize], debug_paths: bool) -> JsValue {
-        assert_eq!(start.len(), 3);
-        assert_eq!(end.len(), 3);
+    pub fn update_pointer_pos(&mut self, x: f32, y: f32) {
+        let pixel_coord = PixelCoord { x, y };
 
-        let start_node = self.data.ways[start[0]].nodes[start[1]];
-        let end_node = self.data.ways[end[0]].nodes[end[1]];
-
-        #[derive(PartialOrd, PartialEq)]
-        struct Item {
-            f_score: Reverse<f32>, 
-            item: usize,
-        }
-
-        impl Eq for Item {}
-
-        impl Ord for Item {
-            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-                self.partial_cmp(other).unwrap()
-            }
-        }
-
-        #[derive(Clone)]
-        struct Scores {
-            g_score: f32,
-            f_score: f32,
-        }
-
-        let mut open_set = BinaryHeap::new();
-        open_set.push(Item { f_score: Reverse(0.0), item: start_node});
-
-        let mut came_from: HashMap<usize, usize> = HashMap::new();
-        let mut scores = vec![Scores {g_score: f32::INFINITY, f_score: f32::INFINITY}; self.data.nodes.len()];
-        scores[start_node].g_score = 0.0;
-        scores[start_node].f_score = distance(&self.data.nodes[start_node], &self.data.nodes[end_node]);
-
-
-        const MAX_ITERS: usize = 10000000;
-        let mut i = 0;
-        while !open_set.is_empty() {
-            i += 1;
-
-            if i >= MAX_ITERS {
-                break;
-            }
-            let item = open_set.pop().unwrap().item;
-
-            if item == end_node {
-                if debug_paths {
-                    break;
-                } else {
-                    return serde_wasm_bindgen::to_value(&PlannedPath(reconstruct_path(&self.data, &came_from, item))).unwrap()
-                }
-            }
-
-            for neighbor in neighbors(&self.data, item) {
-                let neighbor_distance = distance(&self.data.nodes[item], &self.data.nodes[neighbor]);
-                let tentative_g_score = scores[item].g_score + neighbor_distance;
-
-                if tentative_g_score < scores[neighbor].g_score {
-                    came_from.insert(neighbor, item);
-                    scores[neighbor].g_score = tentative_g_score;
-                    scores[neighbor].f_score =  tentative_g_score + distance(&self.data.nodes[neighbor], &self.data.nodes[end_node]);
-
-                    open_set.push(Item {f_score: Reverse(scores[neighbor].f_score), item: neighbor});
-                }
-
-            }
-        }
-
-        if debug_paths {
-            let ret = scores.iter().enumerate()
-                .filter_map(|(i, scores)| {
-                    if scores.f_score < f32::INFINITY {
-                        Some(i)
-                    }
-                    else {
-                        None
-                    }
-                })
-                .map(|k: usize| node_to_long_lat(&self.data.nodes[k]))
-                .collect();
-
-            serde_wasm_bindgen::to_value(&PlannedPath(ret)).unwrap()
-        } else {
-            JsValue::NULL
-        }
-    }
-}
-
-
-fn node_to_long_lat(node: &Node) -> (f32, f32) {
-    return (node.long as f32 / 10000000.0, node.lat as f32 / 10000000.0)
-}
-
-fn neighbors(data: &Data, item: usize)  -> Vec<usize> {
-    let mut neighbors = Vec::new();
-
-    for node_to_way in &data.node_to_way[item] {
-        let way_id = &node_to_way[0];
-        let sub_id = &node_to_way[1];
-        let way = &data.ways[*way_id];
-
-        if sub_id + 1 != way.nodes.len() {
-            neighbors.push(way.nodes[sub_id + 1]);
-        }
-
-        if *sub_id != 0 {
-            neighbors.push(way.nodes[sub_id - 1]);
-        }
+        self.inner
+            .update_cursor_pos(Some(&pixel_coord), &self.viewport_size());
     }
 
-    neighbors
-}
+    pub fn zoom(&mut self, amount: f32, x: f32, y: f32) {
+        let zoom_center = PixelCoord { x, y };
 
-fn distance(n1: &Node, n2: &Node) -> f32 {
-    let long_dist = n2.long - n1.long;
-    let lat_dist = n2.lat - n1.lat;
-
-    let mut long_dist = long_dist as f32 * f32::cos((n2.lat as f32) / 10000000.0 * std::f32::consts::PI / 180.0);
-
-    long_dist = long_dist / 10000000.0;
-    let lat_dist = lat_dist as f32 / 10000000.0;
-
-    f32::sqrt(long_dist * long_dist + lat_dist * lat_dist)
-}
-
-fn reconstruct_path(data: &Data, came_from: &HashMap<usize, usize>, mut current: usize) -> Vec<(f32, f32)> {
-    let mut total_path = vec![node_to_long_lat(&data.nodes[current])];
-    while came_from.contains_key(&current) {
-        current = came_from[&current];
-        total_path.push(node_to_long_lat(&data.nodes[current]))
+        self.inner.zoom(amount, &zoom_center, &self.viewport_size());
     }
 
-    total_path
+    pub fn render(&self) {
+        let window = web_sys::window().unwrap();
+        let document = window.document().unwrap();
+        let body = document.body().unwrap();
+        self.canvas.set_width(body.client_width() as u32);
+        self.canvas.set_height(body.client_height() as u32);
+        unsafe {
+            self.gl.viewport(
+                0,
+                0,
+                self.canvas.width() as i32,
+                self.canvas.height() as i32,
+            );
+        }
+        self.inner.render_map();
+    }
+
+    pub fn move_map(&mut self, dx: f32, dy: f32) {
+        let movement = PixelOffset { x: dx, y: dy };
+
+        self.inner.move_map(&movement, &self.viewport_size());
+    }
+
+    pub fn pixel_to_geocoord(&self, x: f32, y: f32) -> Vec<f32> {
+        let coord = self
+            .inner
+            .pixel_to_geocoord(&PixelCoord { x, y }, &self.viewport_size());
+        vec![coord.long, coord.lat]
+    }
+
+    pub fn set_debug_mode(&mut self, enable: bool) {
+        self.inner.set_debug_mode(enable);
+    }
+
+    pub fn start_path_plan(&mut self) {
+        self.inner.start_path_plan();
+    }
+
+    pub fn clear_path_plan(&mut self) {
+        self.inner.clear_path_plan();
+    }
+
+    pub fn selected_tags(&self) -> JsValue {
+        serde_wasm_bindgen::to_value(&self.inner.selected_tags()).unwrap()
+    }
+
+    pub fn update_highlight(&self, regex: String, color: &[f32]) {
+        let color = Color::from_rgb(color[0], color[1], color[2]);
+        self.inner.set_highlight_list(&[
+            (regex, color)
+        ]);
+
+    }
+
+    fn viewport_size(&self) -> Size {
+        Size {
+            width: self.canvas.width(),
+            height: self.canvas.height(),
+        }
+    }
 }

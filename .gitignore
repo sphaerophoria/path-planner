@@ -1,4 +1,7 @@
 /daemon/target
 /client/www
+/client/pkg
 /client/node_modules
 /client/src/rust/target
+data.json
+/target

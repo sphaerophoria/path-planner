@@ -14,8 +14,6 @@ html, body {
   width: 300px;
   padding: 5px;
   margin: 20px;
-  /* Will be enabled by javascript on mouse enter */
-  display: none;
 }
 
 .overlay-text {

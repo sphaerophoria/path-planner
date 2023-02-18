@@ -1,0 +1,11 @@
+[workspace]
+
+members = [
+  "daemon",
+  "common",
+  "path-planner-egui",
+  "path-planner",
+]
+
+[profile.release]
+debug = true

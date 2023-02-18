@@ -2,7 +2,8 @@ with import (fetchTarball https://github.com/NixOS/nixpkgs/archive/81c6c120e6f84
 
 pkgs.mkShell {
   buildInputs = with pkgs; [
-    rustup  rust-analyzer nodePackages_latest.vscode-langservers-extracted nodePackages_latest.eslint jsbeautifier nodejs wasm-pack binaryen
+    rustup  rust-analyzer nodePackages_latest.vscode-langservers-extracted nodePackages_latest.eslint jsbeautifier nodejs wasm-pack binaryen linuxPackages_latest.perf
   ];
+  LD_LIBRARY_PATH = with pkgs.xorg; "${libX11}/lib:${libXcursor}/lib:${libXxf86vm}/lib:${libXi}/lib:${libXrandr}/lib:${pkgs.libGL}/lib";
 }
 
