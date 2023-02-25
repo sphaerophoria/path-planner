@@ -1,10 +1,11 @@
-use anyhow::{anyhow, bail, Context, Result};
 use common::{Data, Node, Way};
 use glow::HasContext;
 use regex::Regex;
 use std::{
     cmp::Reverse,
     collections::{BinaryHeap, HashMap, HashSet},
+    error::Error,
+    fmt,
     ops::Deref,
     sync::Arc,
 };
@@ -169,6 +170,61 @@ struct VertexData {
     b: f32,
 }
 
+#[derive(Debug)]
+pub enum MapRendererCreationError {
+    RenderProgramCompilation(ProgramCreationError),
+    MapVertexArray(String),
+    MapBuffer(String),
+    MapIndex(String),
+    SecondaryVertexArray(String),
+    SecondaryBuffer(String),
+    WayfinderProgram(ProgramCreationError),
+    WayfinderRenderbuffer(String),
+    WayfinderFramebuffer(String),
+}
+
+impl fmt::Display for MapRendererCreationError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use MapRendererCreationError::*;
+
+        match &self {
+            RenderProgramCompilation(_) => f.write_str("Failed to compile render program"),
+            MapVertexArray(s) => {
+                write!(f, "Failed to create map vertex array: {s}")
+            }
+            MapBuffer(s) => {
+                write!(f, "Failed to create map buffer: {s}")
+            }
+            MapIndex(s) => {
+                write!(f, "Failed to create map index: {s}")
+            }
+            SecondaryVertexArray(s) => {
+                write!(f, "Failed to create secondary vertex array: {s}")
+            }
+            SecondaryBuffer(s) => {
+                write!(f, "Failed to create secondary buffer: {s}")
+            }
+            WayfinderProgram(_) => f.write_str("Failed to compile wayfinder program"),
+            WayfinderRenderbuffer(s) => {
+                write!(f, "Failed to create wayfinder render buffer: {s}")
+            }
+            WayfinderFramebuffer(s) => {
+                write!(f, "Failed to create wayfinder frame buffer: {s}")
+            }
+        }
+    }
+}
+
+impl Error for MapRendererCreationError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        use MapRendererCreationError::*;
+        match self {
+            RenderProgramCompilation(e) | WayfinderProgram(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
 struct MapRenderer {
     gl: Arc<glow::Context>,
     vertex_array: ScopedVertexArray,
@@ -184,8 +240,10 @@ struct MapRenderer {
 }
 
 impl MapRenderer {
-    fn new(gl: Arc<glow::Context>, data: &Data) -> Result<MapRenderer> {
+    fn new(gl: Arc<glow::Context>, data: &Data) -> Result<MapRenderer, MapRendererCreationError> {
         assert_eq!(std::mem::size_of::<VertexData>(), 24);
+
+        use MapRendererCreationError as E;
 
         unsafe {
             let program = create_program(
@@ -198,22 +256,16 @@ impl MapRenderer {
                     ),
                 ],
             )
-            .context("Failed to create map renderer program")?;
+            .map_err(E::RenderProgramCompilation)?;
 
-            let vertex_array = ScopedVertexArray::new(&gl)
-                .map_err(|s| anyhow!(s))
-                .context("Failed to create map vertex array")?;
+            let vertex_array = ScopedVertexArray::new(&gl).map_err(E::MapVertexArray)?;
             gl.bind_vertex_array(Some(*vertex_array));
 
-            let vertex_buffer = ScopedBuffer::new(&gl)
-                .map_err(|s| anyhow!(s))
-                .context("Failed to create map buffer")?;
+            let vertex_buffer = ScopedBuffer::new(&gl).map_err(E::MapBuffer)?;
 
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(*vertex_buffer));
 
-            let index_buffer = ScopedBuffer::new(&gl)
-                .map_err(|s| anyhow!(s))
-                .context("Failed to create map index buffer")?;
+            let index_buffer = ScopedBuffer::new(&gl).map_err(E::MapIndex)?;
             gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(*index_buffer));
 
             let index_buffer_len = construct_bind_map_buffers(&gl, data, &[]);
@@ -224,15 +276,12 @@ impl MapRenderer {
             gl.bind_buffer(glow::ARRAY_BUFFER, None);
             gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, None);
 
-            let single_point_vertex_array = ScopedVertexArray::new(&gl)
-                .map_err(|s| anyhow!(s))
-                .context("Failed to create secondary vertex array")?;
+            let single_point_vertex_array =
+                ScopedVertexArray::new(&gl).map_err(E::SecondaryVertexArray)?;
 
             gl.bind_vertex_array(Some(*single_point_vertex_array));
 
-            let single_point_vertex_buffer = ScopedBuffer::new(&gl)
-                .map_err(|s| anyhow!(s))
-                .context("Failed to create secondary vertex buffer")?;
+            let single_point_vertex_buffer = ScopedBuffer::new(&gl).map_err(E::SecondaryBuffer)?;
 
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(*single_point_vertex_buffer));
 
@@ -248,12 +297,9 @@ impl MapRenderer {
                     (glow::FRAGMENT_SHADER, include_str!("color_way_id.glsl")),
                 ],
             )
-            .map_err(|s| anyhow!(s))
-            .context("Failed to create wayfinder program")?;
+            .map_err(E::WayfinderProgram)?;
 
-            let wayfinder_rbo = ScopedRenderbuffer::new(&gl)
-                .map_err(|s| anyhow!(s))
-                .context("Failed to create wayfinder render buffer")?;
+            let wayfinder_rbo = ScopedRenderbuffer::new(&gl).map_err(E::WayfinderRenderbuffer)?;
             gl.bind_renderbuffer(glow::RENDERBUFFER, Some(*wayfinder_rbo));
             gl.renderbuffer_storage(
                 glow::RENDERBUFFER,
@@ -262,9 +308,7 @@ impl MapRenderer {
                 WAY_FINDER_RES,
             );
 
-            let wayfinder_fbo = ScopedFramebuffer::new(&gl)
-                .map_err(|s| anyhow!(s))
-                .context("Failed to create wayfinder frame buffer")?;
+            let wayfinder_fbo = ScopedFramebuffer::new(&gl).map_err(E::WayfinderFramebuffer)?;
 
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(*wayfinder_fbo));
             gl.framebuffer_renderbuffer(
@@ -637,6 +681,18 @@ impl PathPlanner {
     }
 }
 
+#[derive(Debug)]
+
+pub struct HighlightError(regex::Error);
+
+impl fmt::Display for HighlightError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Failed to compile highlight regex: {}", self.0)
+    }
+}
+
+impl Error for HighlightError {}
+
 pub struct App {
     gl: Arc<glow::Context>,
     data: Arc<Data>,
@@ -651,7 +707,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(gl: Arc<glow::Context>, data: Data) -> Result<App> {
+    pub fn new(gl: Arc<glow::Context>, data: Data) -> Result<App, MapRendererCreationError> {
         let scale = 10.0;
         let center = GeoCoord {
             long: -123.153946,
@@ -663,8 +719,7 @@ impl App {
             tags.extend(way.tags.iter());
         }
 
-        let map_renderer =
-            MapRenderer::new(Arc::clone(&gl), &data).context("Failed to create map renderer")?;
+        let map_renderer = MapRenderer::new(Arc::clone(&gl), &data)?;
         let data = Arc::new(data);
         let path_planner = PathPlanner::new(Arc::clone(&data));
 
@@ -801,14 +856,15 @@ impl App {
         self.path_start = Default::default();
     }
 
-    pub fn set_highlight_list(&self, highlights: &[(String, Color)]) -> Result<()> {
+    pub fn set_highlight_list(&self, highlights: &[(String, Color)]) -> Result<(), HighlightError> {
         let highlights = highlights
             .iter()
             .map(|(s, c)| {
                 let r = Regex::new(s)?;
                 Ok((r, c.clone()))
             })
-            .collect::<Result<Vec<(Regex, Color)>>>()?;
+            .collect::<Result<Vec<(Regex, Color)>, regex::Error>>()
+            .map_err(HighlightError)?;
 
         self.map_renderer
             .set_highlight_list(&self.data, &highlights);
@@ -886,36 +942,67 @@ fn setup_render(gl: &glow::Context) -> [ScopedGlEnable; 0] {
     []
 }
 
-fn create_program(gl: &Arc<glow::Context>, shaders: &[(u32, &str)]) -> Result<ScopedProgram> {
+#[derive(Debug)]
+pub enum ProgramCreationError {
+    ShaderCreation(u32, String),
+    ShaderCompilation(u32, String),
+    ProgramCreation(String),
+    ProgramLink(String),
+}
+
+impl fmt::Display for ProgramCreationError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use ProgramCreationError::*;
+        match self {
+            ShaderCreation(t, s) => {
+                write!(f, "Failed to create shader of type {t}: {s}")
+            }
+            ShaderCompilation(t, s) => {
+                write!(f, "Failed to compile shader of type {t}: {s}")
+            }
+            ProgramCreation(s) => {
+                write!(f, "Failed to create program: {s}")
+            }
+            ProgramLink(s) => {
+                write!(f, "Failed to link program: {s}")
+            }
+        }
+    }
+}
+
+impl Error for ProgramCreationError {}
+
+fn create_program(
+    gl: &Arc<glow::Context>,
+    shaders: &[(u32, &str)],
+) -> Result<ScopedProgram, ProgramCreationError> {
+    use ProgramCreationError as E;
+
     unsafe {
-        let program = ScopedProgram::new(gl)
-            .map_err(|s| anyhow!(s))
-            .context("Cannot create program")?;
+        let program = ScopedProgram::new(gl).map_err(E::ProgramCreation)?;
 
         let shaders = shaders
             .iter()
             .map(|(shader_type, shader_source)| {
                 let shader = gl
                     .create_shader(*shader_type)
-                    .map_err(|s| anyhow!(s))
-                    .context("Cannot create shader")?;
+                    .map_err(|s| E::ShaderCreation(*shader_type, s))?;
                 gl.shader_source(shader, shader_source);
                 gl.compile_shader(shader);
                 if !gl.get_shader_compile_status(shader) {
-                    bail!(
-                        "Failed to compile {shader_type}: {}",
-                        gl.get_shader_info_log(shader)
-                    );
+                    return Err(E::ShaderCompilation(
+                        *shader_type,
+                        gl.get_shader_info_log(shader),
+                    ));
                 }
                 gl.attach_shader(*program, shader);
                 Ok(shader)
             })
-            .collect::<Result<Vec<_>>>()
-            .context("Failed to compile shaders")?;
+            .collect::<Result<Vec<_>, ProgramCreationError>>()?;
 
         gl.link_program(*program);
         if !gl.get_program_link_status(*program) {
-            bail!("{}", gl.get_program_info_log(*program));
+            return Err(E::ProgramLink(gl.get_program_info_log(*program)));
         }
 
         for shader in shaders {

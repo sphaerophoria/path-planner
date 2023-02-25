@@ -1,13 +1,60 @@
-use anyhow::{Context, Result};
-use clap::Parser;
 use common::{Data, Node, Way};
 use osmpbf::Element;
 use std::collections::{HashMap, HashSet};
-use std::{fs::OpenOptions, path::PathBuf};
+use std::{borrow::Cow, error::Error as StdError, fmt, fs::OpenOptions, path::PathBuf};
 
 const VANCOUVER: &[u8] = include_bytes!("../res/vancouver.osm.pbf");
 
-pub fn data_from_osm_pbf(pbf: &[u8]) -> Result<Data> {
+pub struct Error {
+    reason: Cow<'static, str>,
+    source: Option<Box<dyn StdError>>,
+}
+
+impl Error {
+    fn new<S, E>(reason: S, source: E) -> Error
+    where
+        S: Into<Cow<'static, str>>,
+        E: Into<Box<dyn StdError>>,
+    {
+        Error {
+            reason: reason.into(),
+            source: Some(source.into()),
+        }
+    }
+}
+
+impl fmt::Debug for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(&self.reason)?;
+
+        let mut it = match self.source() {
+            Some(e) => e,
+            None => return Ok(()),
+        };
+
+        write!(f, "\n\nCaused by:\n{it}")?;
+
+        while let Some(e) = it.source() {
+            fmt::Display::fmt(e, f)?;
+            it = e;
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(&self.reason)
+    }
+}
+
+impl StdError for Error {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        self.source.as_deref()
+    }
+}
+
+pub fn data_from_osm_pbf(pbf: &[u8]) -> Result<Data, Error> {
     let pbf_reader = osmpbf::ElementReader::new(pbf);
 
     let mut nodes = HashMap::new();
@@ -56,7 +103,7 @@ pub fn data_from_osm_pbf(pbf: &[u8]) -> Result<Data> {
             }
             Element::Relation(_relation) => {}
         })
-        .context("Failed to read pbf")?;
+        .map_err(|e| Error::new("Failed to read osm pbf", e))?;
 
     // Once we've walked the whole pbf, we can discard any nodes that are not related to our
     // paths. Since this will end up being a subset of all ids, we also heal the way references
@@ -84,23 +131,82 @@ pub fn data_from_osm_pbf(pbf: &[u8]) -> Result<Data> {
     })
 }
 
-#[derive(Parser, Debug)]
 struct Args {
-    #[arg(short, long)]
     www_path: PathBuf,
 }
 
-fn main() {
-    let args = Args::parse();
+impl Args {
+    fn new<T, U>(inputs: T) -> Args
+    where
+        T: IntoIterator<Item = U>,
+        U: AsRef<str>,
+    {
+        let mut it = inputs.into_iter();
+        let exe_name = it.next();
+        let exe_name = exe_name.as_ref().map(|v| v.as_ref()).unwrap_or("server");
 
-    let data = data_from_osm_pbf(VANCOUVER).unwrap();
+        let mut www_path = None;
+        while let Some(input) = it.next() {
+            let input = input.as_ref();
+            match input {
+                "--www-path" | "-w" => {
+                    www_path = it.next();
+                }
+                "--help" => {
+                    Self::help(exe_name);
+                }
+                a => {
+                    eprintln!("Unknown argument: {a}");
+                    Self::help(exe_name);
+                }
+            }
+        }
 
+        if www_path.is_none() {
+            Self::help(exe_name);
+        }
+
+        let www_path = match www_path {
+            Some(v) => v,
+            None => Self::help(exe_name),
+        };
+
+        Args {
+            www_path: www_path.as_ref().into(),
+        }
+    }
+
+    fn help(exe_name: &str) -> ! {
+        eprintln!(
+            " \n\
+                  {exe_name} \n\
+                  \n\
+                  Periodically produce an updated data.json for path-planner use \n\
+                  \n\
+                  Args: \n\
+                  \n\
+                  --www-path | -w <WWW_PATH>: Where to write the output \n"
+        );
+
+        std::process::exit(1);
+    }
+}
+
+fn main() -> Result<(), Error> {
+    let args = Args::new(std::env::args());
+
+    let data =
+        data_from_osm_pbf(VANCOUVER).map_err(|e| Error::new("Failed to retrieve data", e))?;
+
+    let output_path = args.www_path.join("data.json");
     let f = OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
-        .open(args.www_path.join("data.json"))
-        .unwrap();
+        .open(&output_path)
+        .map_err(|e| Error::new(format!("Failed to open to {}", output_path.display()), e))?;
 
-    serde_json::to_writer(f, &data).unwrap();
+    serde_json::to_writer(f, &data).map_err(|e| Error::new("Failed to serialize data", e))?;
+
+    Ok(())
 }

@@ -3,7 +3,7 @@ use eframe::egui;
 use common::Data;
 use egui::{mutex::Mutex, text::LayoutJob, Color32, Style, TextEdit, TextStyle, Visuals};
 use path_planner::{Color, PixelCoord, PixelOffset, Size};
-use std::sync::Arc;
+use std::{error::Error, sync::Arc};
 
 const DATA: &[u8] = include_bytes!("../../client/www/data.json");
 
@@ -41,7 +41,19 @@ impl MyApp {
             visuals: Visuals::dark(),
             ..Default::default()
         });
-        let planner = path_planner::App::new(Arc::clone(gl), data).unwrap();
+        let planner = match path_planner::App::new(Arc::clone(gl), data) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("Failed to create planner: {e}");
+                let mut it = &e as &dyn Error;
+                while let Some(reason) = it.source() {
+                    eprintln!("{reason}");
+                    it = reason;
+                }
+                std::process::exit(1);
+            }
+        };
+
         Self {
             path_planner: Arc::new(Mutex::new(planner)),
             enable_path_debug: false,
