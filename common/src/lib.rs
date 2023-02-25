@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 pub struct Node {
     pub lat: i32,
     pub long: i32,
+    pub height: Option<f32>,
 }
 
 #[derive(Serialize, Deserialize)]

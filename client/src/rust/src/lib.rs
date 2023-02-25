@@ -1,11 +1,13 @@
 use glow::HasContext;
 use path_planner::{Color, PixelCoord, PixelOffset, Size};
+use tracing::{event, Level};
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 pub fn init() {
-    wasm_logger::init(Default::default());
+    tracing_wasm::set_as_global_default();
+    event!(Level::INFO, "Logger initialized");
 }
 
 #[wasm_bindgen]

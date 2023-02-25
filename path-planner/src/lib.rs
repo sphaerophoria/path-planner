@@ -351,6 +351,7 @@ impl MapRenderer {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render(
         &self,
         scale: f32,
@@ -1186,7 +1187,7 @@ fn way_color(way: &Way, highlights: &[(Regex, Color)]) -> Color {
         }
     }
 
-    Color::from_rgb(1.0, 1.0, 1.0)
+    Color::from_rgb(0.0, 0.0, 0.0)
 }
 
 fn construct_bind_map_buffers(
@@ -1194,6 +1195,39 @@ fn construct_bind_map_buffers(
     data: &Data,
     highlights: &[(Regex, Color)],
 ) -> usize {
+    let mut min_height = f32::MAX;
+    let mut max_height = f32::MIN;
+
+    for node in &data.nodes {
+        let node_height = match node.height {
+            Some(v) => v,
+            None => continue,
+        };
+
+        if node_height > max_height {
+            max_height = node_height
+        }
+
+        if node_height < min_height {
+            min_height = node_height;
+        }
+    }
+
+    let scale_val_with_height = move |v: Option<f32>| {
+        let v = v.unwrap_or(0.0);
+        let mut ret = (v - min_height) / (max_height - min_height);
+        ret = f32::max(ret, 0.0);
+        ret = f32::powf(ret, 0.5);
+        ret
+    };
+
+    let scale_color_with_height = move |mut c: Color, v| {
+        c.r = f32::min(1.0, c.r + scale_val_with_height(v));
+        c.g = f32::min(1.0, c.g + scale_val_with_height(v));
+        c.b = f32::min(1.0, c.b + scale_val_with_height(v));
+        c
+    };
+
     let mut vertex_buffer_data = Vec::new();
     let mut index_buffer_data: Vec<u32> = Vec::new();
     for (i, way) in data.ways.iter().enumerate() {
@@ -1201,6 +1235,7 @@ fn construct_bind_map_buffers(
 
         for node_id in &way.nodes {
             let node = &data.nodes[*node_id];
+            let color = scale_color_with_height(color.clone(), node.height);
             vertex_buffer_data.push(VertexData {
                 long: node.long as f32 / 10000000.0,
                 lat: node.lat as f32 / 10000000.0,
